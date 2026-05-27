@@ -46,6 +46,27 @@ _constrain(d::Vec2f, mode::Symbol) =
     mode === :x ? Vec2f(d[1], 0) : mode === :y ? Vec2f(0, d[2]) : d
 
 """
+Mark labels whose final box overlaps more than `max_overlaps` other label boxes.
+`Inf` keeps everything.
+"""
+function compute_drops(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
+                       psizes::Vector{Vec2f}, max_overlaps::Real)
+    n = length(anchors)
+    dropped = falses(n)
+    isinf(max_overlaps) && return dropped
+    boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
+    for i in 1:n
+        count = 0
+        for j in 1:n
+            i == j && continue
+            overlap_push(boxes[i], boxes[j]) != Vec2f(0, 0) && (count += 1)
+        end
+        dropped[i] = count > max_overlaps
+    end
+    return dropped
+end
+
+"""
 Solve label offsets (pixels) so boxes avoid each other and their anchor points.
 
 Returns `(offsets::Vector{Vec2f}, dropped::BitVector)`. `anchors` and `sizes`
@@ -99,7 +120,3 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
 
     return (offsets, compute_drops(anchors, offsets, psizes, p.max_overlaps))
 end
-
-# defined in Task 5; declared here so solve_repel resolves
-function compute_drops end
-compute_drops(anchors, offsets, psizes, max_overlaps) = falses(length(anchors))

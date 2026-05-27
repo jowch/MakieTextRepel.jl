@@ -76,3 +76,21 @@ end
     oc, _ = solve_repel(co, cs, RepelParams())
     @test all(o -> all(isfinite, o), oc)
 end
+
+using MakieTextRepel: compute_drops
+
+@testset "compute_drops" begin
+    anchors = [Point2f(0, 0), Point2f(1, 0), Point2f(2, 0)]
+    # Narrow boxes (width 1.5): neighbours 1px apart overlap; the ends, 2px
+    # apart, do NOT. (Wide boxes would make all three mutually overlap.)
+    psizes = [Vec2f(1.5, 1.0), Vec2f(1.5, 1.0), Vec2f(1.5, 1.0)]
+    offsets = [Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0)]
+
+    # Inf max_overlaps → nothing dropped
+    @test compute_drops(anchors, offsets, psizes, Inf) == falses(3)
+
+    # max_overlaps = 1 → the middle box overlaps both neighbours (count 2) and is
+    # dropped; each end overlaps only the middle (count 1) and survives.
+    dropped = compute_drops(anchors, offsets, psizes, 1)
+    @test dropped == BitVector([false, true, false])
+end
