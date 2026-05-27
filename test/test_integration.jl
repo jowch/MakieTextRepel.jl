@@ -28,3 +28,17 @@ end
     @test all(o -> all(isfinite, o), offs)
     @test maximum(norm, offs) > 0          # crowded labels actually moved
 end
+
+@testset "connectors render" begin
+    fig = Figure(size = (400, 400))
+    ax = Axis(fig[1, 1])
+    pts = Point2f[(1, 1), (1.005, 1.005)]   # very close → labels must move far
+    pl = textrepel!(ax, pts; text = ["overlapping one", "overlapping two"],
+                    segments = true, min_segment_length = 1.0)
+    Makie.update_state_before_display!(fig.scene)
+
+    # a LineSegments child plot exists and has an even number of endpoints
+    seg_plots = filter(c -> c isa LineSegments, pl.plots)
+    @test length(seg_plots) == 1
+    @test iseven(length(seg_plots[1][1][]))
+end

@@ -99,5 +99,14 @@ function Makie.plot!(p::TextRepel)
         text = keep_text, offset = keep_offsets, markerspace = :pixel,
         fontsize = p.fontsize, font = p.font, color = p.color, align = p.align)
 
+    # 4. Connector segments (pixel space; coexists with data-space text anchors).
+    seg_points = lift(solved, p.min_segment_length, p.box_padding, p.segments) do s, ml, bp, on
+        on || return Point2f[]
+        build_connectors(s.anchors, s.offsets, s.sizes, s.dropped,
+                         Float64(ml), Float64(bp))
+    end
+    linesegments!(p, seg_points; space = :pixel,
+        color = p.segmentcolor, linewidth = p.linewidth, visible = p.segments)
+
     return p
 end
