@@ -54,3 +54,16 @@ end
     poly_plots = filter(c -> c isa Poly, pl.plots)
     @test length(poly_plots) == 1
 end
+
+@testset "visual artifact renders" begin
+    fig = Figure(size = (600, 400))
+    ax = Axis(fig[1, 1]; title = "textrepel demo")
+    pts = Point2f[(1, 1), (1.1, 1.05), (1.05, 0.9), (2, 2), (2.05, 2.02)]
+    scatter!(ax, pts; color = :tomato)
+    textrepel!(ax, pts; text = ["alpha", "beta", "gamma", "delta", "epsilon"],
+               segments = true)
+    out = joinpath(@__DIR__, "output", "demo.png")
+    mkpath(dirname(out))
+    save(out, fig)
+    @test isfile(out) && filesize(out) > 0
+end
