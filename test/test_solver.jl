@@ -20,3 +20,59 @@ using LinearAlgebra
     @test norm(off1[2]) > 0            # second coincident label nudged
     @test norm(off1[3]) > 0
 end
+
+using MakieTextRepel: solve_repel
+using MakieTextRepel: box_at
+
+# direct AABB overlap test (px), with a tolerance — the spring leaves sub-pixel
+# residual overlap at equilibrium, which we treat as "separated".
+function _boxes_overlap(b1, b2, tol)
+    c1 = b1.origin .+ b1.widths ./ 2
+    c2 = b2.origin .+ b2.widths ./ 2
+    ox = (b1.widths[1] + b2.widths[1]) / 2 - abs(c1[1] - c2[1])
+    oy = (b1.widths[2] + b2.widths[2]) / 2 - abs(c1[2] - c2[2])
+    return ox > tol && oy > tol
+end
+
+function _any_overlap(anchors, offsets, sizes, pad; tol = 0.5)
+    psizes = [s .+ Vec2f(2f0 * Float32(pad)) for s in sizes]
+    boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in eachindex(anchors)]
+    for i in eachindex(boxes), j in eachindex(boxes)
+        i < j || continue
+        _boxes_overlap(boxes[i], boxes[j], tol) && return true
+    end
+    return false
+end
+
+@testset "solve_repel" begin
+    p = RepelParams(box_padding = 0.0)
+
+    # empty / single
+    @test solve_repel(Point2f[], Vec2f[], p) == (Vec2f[], falses(0))
+    o1, d1 = solve_repel([Point2f(5, 5)], [Vec2f(10, 4)], p)
+    @test o1 == [Vec2f(0, 0)]          # single label never moves
+    @test d1 == falses(1)
+
+    # two overlapping labels separate
+    anchors = [Point2f(0, 0), Point2f(2, 0)]
+    sizes = [Vec2f(20, 10), Vec2f(20, 10)]
+    offsets, dropped = solve_repel(anchors, sizes, p)
+    @test !_any_overlap(anchors, offsets, sizes, p.box_padding)
+    @test !any(dropped)
+
+    # determinism: identical inputs → identical outputs
+    o_a, _ = solve_repel(anchors, sizes, p)
+    o_b, _ = solve_repel(anchors, sizes, p)
+    @test o_a == o_b
+
+    # axis constraint: only_move = :x → zero y displacement
+    px = RepelParams(box_padding = 0.0, only_move = :x)
+    ox, _ = solve_repel(anchors, sizes, px)
+    @test all(o -> o[2] == 0, ox)
+
+    # stability: many coincident labels don't NaN
+    co = fill(Point2f(0, 0), 8)
+    cs = fill(Vec2f(15, 8), 8)
+    oc, _ = solve_repel(co, cs, RepelParams())
+    @test all(o -> all(isfinite, o), oc)
+end

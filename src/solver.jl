@@ -39,3 +39,67 @@ function explode_init(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPa
     end
     return offsets
 end
+
+_clamp_step(d::Vec2f, m::Float32) = (n = norm(d); (n == 0 || n <= m) ? d : d .* (m / n))
+
+_constrain(d::Vec2f, mode::Symbol) =
+    mode === :x ? Vec2f(d[1], 0) : mode === :y ? Vec2f(0, d[2]) : d
+
+"""
+Solve label offsets (pixels) so boxes avoid each other and their anchor points.
+
+Returns `(offsets::Vector{Vec2f}, dropped::BitVector)`. `anchors` and `sizes`
+are in pixels; a label's box is centered at `anchor + offset`, padded by
+`params.box_padding`.
+"""
+function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
+    n = length(anchors)
+    n == 0 && return (Vec2f[], falses(0))
+    @assert length(sizes) == n "anchors and sizes must have equal length"
+
+    psizes = [s .+ 2 * Float32(p.box_padding) for s in sizes]
+    offsets = explode_init(anchors, psizes, p)
+
+    fx, fy   = Float32.(p.force)
+    ppx, ppy = Float32.(p.force_point)
+    plx, ply = Float32.(p.force_pull)
+    pad      = Float32(p.point_padding)
+    smax     = Float32(p.step_max)
+    pthr     = Float32(p.pull_threshold)
+
+    for _ in 1:p.max_iter
+        boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
+        Δ = Vector{Vec2f}(undef, n)
+        for i in 1:n
+            f = Vec2f(0, 0)
+            for j in 1:n
+                i == j && continue
+                push = overlap_push(boxes[i], boxes[j])
+                f = f .+ Vec2f(push[1] * fx, push[2] * fy)
+            end
+            for j in 1:n
+                i == j && continue   # don't repel a label from its OWN anchor
+                pp = point_push(boxes[i], anchors[j], pad)
+                f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
+            end
+            off = offsets[i]
+            if norm(off) > pthr
+                f = f .- Vec2f(off[1] * plx, off[2] * ply)
+            end
+            Δ[i] = f
+        end
+        maxmove = 0f0
+        for i in 1:n
+            d = _constrain(_clamp_step(Δ[i], smax), p.only_move)
+            offsets[i] = offsets[i] .+ d
+            maxmove = max(maxmove, norm(d))
+        end
+        maxmove < p.tol && break
+    end
+
+    return (offsets, compute_drops(anchors, offsets, psizes, p.max_overlaps))
+end
+
+# defined in Task 5; declared here so solve_repel resolves
+function compute_drops end
+compute_drops(anchors, offsets, psizes, max_overlaps) = falses(length(anchors))
