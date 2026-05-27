@@ -95,6 +95,18 @@ function Makie.plot!(p::TextRepel)
     end
     keep_offsets = @lift Vec2f[$solved.offsets[i] for i in eachindex($solved.offsets) if !$solved.dropped[i]]
 
+    # 3a. Optional background boxes (drawn beneath text), pixel space.
+    # TODO(rounded-corners): cornerradius attribute is wired but unused here; v1 draws plain Rect2f.
+    box_rects = lift(solved, p.background, p.box_padding) do s, bg, bp
+        bg || return Rect2f[]
+        pad = Float32(bp)
+        Rect2f[box_at(s.anchors[i], s.offsets[i], s.sizes[i] .+ 2pad)
+               for i in eachindex(s.anchors) if !s.dropped[i]]
+    end
+    poly!(p, box_rects; space = :pixel,
+        color = p.backgroundcolor, strokecolor = p.strokecolor,
+        strokewidth = p.strokewidth, visible = p.background)
+
     text!(p, keep_positions;
         text = keep_text, offset = keep_offsets, markerspace = :pixel,
         fontsize = p.fontsize, font = p.font, color = p.color, align = p.align)

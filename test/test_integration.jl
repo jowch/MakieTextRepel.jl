@@ -42,3 +42,15 @@ end
     @test length(seg_plots) == 1
     @test iseven(length(seg_plots[1][1][]))
 end
+
+@testset "background boxes" begin
+    fig = Figure(size = (400, 400))
+    ax = Axis(fig[1, 1])
+    pl = textrepel!(ax, Point2f[(1, 1), (2, 2)]; text = ["one", "two"],
+                    background = true)
+    Makie.update_state_before_display!(fig.scene)
+
+    # a Poly child plot exists when background = true
+    poly_plots = filter(c -> c isa Poly, pl.plots)
+    @test length(poly_plots) == 1
+end
