@@ -1,5 +1,16 @@
 module MakieTextRepel
 
-greet() = print("Hello World!")
+using Makie
+using GeometryBasics
+using LinearAlgebra
+import TextMeasure
+
+export textrepel, textrepel!
+
+include("geometry.jl")
+include("solver.jl")
+include("connectors.jl")
+include("measure.jl")
+include("recipe.jl")
 
 end # module MakieTextRepel
