@@ -182,6 +182,7 @@ using GeometryBasics
     push = overlap_push(a, near)
     @test push[1] < 0          # a is left of near, pushed further left
     @test abs(push[1]) ≈ 1.0   # overlap extent on x
+    @test push[2] == 0         # boxes share y (aligned axis) → no y push
 
     # point_push: point outside box returns zero
     box = box_at(Point2f(0, 0), Vec2f(0, 0), Vec2f(4, 4))
@@ -189,7 +190,7 @@ using GeometryBasics
 
     # point_push: point inside box pushes box away from point
     pp = point_push(box, Point2f(1, 0), 0f0)
-    @test pp[1] > 0            # point left-of-center → box pushed right
+    @test pp[1] < 0            # point right-of-center → box pushed left
 
     # clip_to_box_edge: point on the box boundary toward the target
     edge = clip_to_box_edge(box, Point2f(100, 0))   # target far to the right
@@ -217,31 +218,38 @@ box_at(anchor::Point2f, offset::Vec2f, size::Vec2f) =
 _center(b::Rect2f) = Point2f(b.origin .+ b.widths ./ 2)
 
 """
-Per-axis push moving box `a` away from box `b` by their overlap extent.
-Zero vector if they don't overlap. If centers coincide, breaks ties toward +x.
+Per-axis separation push given center-difference `d` and per-axis overlaps.
+Zero if not overlapping. Pushes only along axes carrying directional info; a
+perfectly-aligned axis (`d[k] == 0`) contributes 0 so an aligned pair separates
+along the *other* axis instead of running away together. Fully-coincident
+centers fall back to +x (explosion init normally prevents this case).
 """
+function _aniso_push(d, ox::Real, oy::Real)
+    (ox <= 0 || oy <= 0) && return Vec2f(0, 0)
+    (d[1] == 0 && d[2] == 0) && return Vec2f(ox, 0)
+    px = d[1] == 0 ? 0f0 : sign0(d[1]) * ox
+    py = d[2] == 0 ? 0f0 : sign0(d[2]) * oy
+    return Vec2f(px, py)
+end
+
+"""Per-axis push moving box `a` away from overlapping box `b` (zero if disjoint)."""
 function overlap_push(a::Rect2f, b::Rect2f)
     d = _center(a) .- _center(b)
     ox = (a.widths[1] + b.widths[1]) / 2 - abs(d[1])
     oy = (a.widths[2] + b.widths[2]) / 2 - abs(d[2])
-    (ox <= 0 || oy <= 0) && return Vec2f(0, 0)
-    sx = d[1] == 0 && d[2] == 0 ? 1f0 : sign0(d[1])
-    return Vec2f(sx * ox, sign0(d[2]) * oy)
+    return _aniso_push(d, ox, oy)
 end
 
 """
 Push box away from point `p` if `p` lies within the box expanded by `padding`.
-Zero vector otherwise.
+Zero vector otherwise. Uses the same aligned-axis-safe scheme as `overlap_push`.
 """
 function point_push(box::Rect2f, p::Point2f, padding::Float32)
     ex = Rect2f(Point2f(box.origin .- padding), box.widths .+ 2padding)
-    c = _center(ex)
-    d = c .- p
+    d = _center(ex) .- p
     ox = ex.widths[1] / 2 - abs(d[1])
     oy = ex.widths[2] / 2 - abs(d[2])
-    (ox <= 0 || oy <= 0) && return Vec2f(0, 0)
-    sx = d[1] == 0 && d[2] == 0 ? 1f0 : sign0(d[1])
-    return Vec2f(sx * ox, sign0(d[2]) * oy)
+    return _aniso_push(d, ox, oy)
 end
 
 """
@@ -344,12 +352,16 @@ non-zero gradient to act on (replaces upstream random jitter).
 function explode_init(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
     n = length(anchors)
     offsets = fill(Vec2f(0, 0), n)
-    for i in 1:n, j in 1:(i - 1)
-        if norm(anchors[i] .- anchors[j]) < 1f-3
-            θ = _GOLDEN_ANGLE * i
-            r = (sizes[i][1] + sizes[i][2]) / 4
-            offsets[i] = offsets[i] .+ Vec2f(r * cos(θ), r * sin(θ))
-            break
+    # NOTE: nested loops (not `for i in 1:n, j in ...`) so `break` exits only the
+    # inner j-loop; a fused loop's `break` would skip all remaining i.
+    for i in 1:n
+        for j in 1:(i - 1)
+            if norm(anchors[i] .- anchors[j]) < 1f-3
+                θ = _GOLDEN_ANGLE * i
+                r = (sizes[i][1] + sizes[i][2]) / 4
+                offsets[i] = offsets[i] .+ Vec2f(r * cos(θ), r * sin(θ))
+                break
+            end
         end
     end
     return offsets
@@ -382,15 +394,24 @@ Append to `test/test_solver.jl`:
 
 ```julia
 using MakieTextRepel: solve_repel
-using MakieTextRepel: box_at, overlap_push
+using MakieTextRepel: box_at
 
-# helper: do any two final boxes overlap?
-function _any_overlap(anchors, offsets, sizes, pad)
-    psizes = [s .+ 2pad for s in sizes]
+# direct AABB overlap test (px), with a tolerance — the spring leaves sub-pixel
+# residual overlap at equilibrium, which we treat as "separated".
+function _boxes_overlap(b1, b2, tol)
+    c1 = b1.origin .+ b1.widths ./ 2
+    c2 = b2.origin .+ b2.widths ./ 2
+    ox = (b1.widths[1] + b2.widths[1]) / 2 - abs(c1[1] - c2[1])
+    oy = (b1.widths[2] + b2.widths[2]) / 2 - abs(c1[2] - c2[2])
+    return ox > tol && oy > tol
+end
+
+function _any_overlap(anchors, offsets, sizes, pad; tol = 0.5)
+    psizes = [s .+ Vec2f(2f0 * Float32(pad)) for s in sizes]
     boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in eachindex(anchors)]
     for i in eachindex(boxes), j in eachindex(boxes)
         i < j || continue
-        overlap_push(boxes[i], boxes[j]) != Vec2f(0, 0) && return true
+        _boxes_overlap(boxes[i], boxes[j], tol) && return true
     end
     return false
 end
@@ -477,6 +498,7 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                 f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             for j in 1:n
+                i == j && continue   # don't repel a label from its OWN anchor
                 pp = point_push(boxes[i], anchors[j], pad)
                 f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
             end
@@ -538,16 +560,19 @@ Append to `test/test_solver.jl`:
 using MakieTextRepel: compute_drops
 
 @testset "compute_drops" begin
-    # Inf max_overlaps → nothing dropped
     anchors = [Point2f(0, 0), Point2f(1, 0), Point2f(2, 0)]
-    psizes = [Vec2f(20, 10), Vec2f(20, 10), Vec2f(20, 10)]
-    offsets = [Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0)]   # all overlapping
+    # Narrow boxes (width 1.5): neighbours 1px apart overlap; the ends, 2px
+    # apart, do NOT. (Wide boxes would make all three mutually overlap.)
+    psizes = [Vec2f(1.5, 1.0), Vec2f(1.5, 1.0), Vec2f(1.5, 1.0)]
+    offsets = [Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0)]
+
+    # Inf max_overlaps → nothing dropped
     @test compute_drops(anchors, offsets, psizes, Inf) == falses(3)
 
-    # max_overlaps = 1 → the middle box (overlaps 2 others) is dropped
+    # max_overlaps = 1 → the middle box overlaps both neighbours (count 2) and is
+    # dropped; each end overlaps only the middle (count 1) and survives.
     dropped = compute_drops(anchors, offsets, psizes, 1)
-    @test dropped[2] == true
-    @test dropped[1] == false && dropped[3] == false   # each overlaps only 1
+    @test dropped == BitVector([false, true, false])
 end
 ```
 
@@ -949,8 +974,9 @@ function Makie.plot!(p::TextRepel)
         (; anchors, sizes, offsets, dropped)
     end
 
-    # Expose offsets for testing / downstream use.
-    p.attributes[:computed_offsets] = @lift $solved.offsets
+    # Expose offsets for testing / downstream use. NOTE: in Makie 0.24 `p.attributes`
+    # is a ComputeGraph, not a dict — use `add_input!`, not `setindex!`.
+    Makie.add_input!(p.attributes, :computed_offsets, lift(s -> s.offsets, solved))
 
     # 3. Render text at original DATA positions with per-label pixel offsets,
     #    filtering out dropped labels.
@@ -1223,6 +1249,17 @@ git commit -m "Add visual smoke test, README, and CI"
 
 ## Notes / deferred (out of v1 scope)
 
+- **Isolated labels sit on their own marker.** Because the solver skips a label's
+  own anchor in point-repulsion (it's the thing the label is attached to via the
+  spring), a single uncrowded label stays centered on its data point (offset 0). In
+  practice labels in a populated scatter are pushed off markers by neighbouring
+  points/labels. A future `nudge`/`point_padding`-from-own-anchor option could force
+  an offset for isolated labels if desired.
+- **Force model is min-info anisotropic, not min-penetration.** `_aniso_push` pushes
+  proportional to overlap on each axis and zeroes a perfectly-aligned axis. This was
+  chosen (over standard min-penetration AABB resolution) because min-penetration
+  picks the *smaller* overlap axis, which for side-by-side same-row labels is the
+  degenerate vertical axis — causing a symmetric runaway. Validated by dry-run.
 - **Reactive re-solving** on zoom/pan/resize. The `lift` chain in `plot!` already re-runs the solver when its inputs change; wiring camera/viewport observables to re-project on zoom is a later additive change. Seams are in place.
 - **Glyph-coverage fallback** in `measure.jl` (`# TODO(glyph-fallback)`) — narrow mismatched-font/script case.
 - **Rounded background corners** (`# TODO(rounded-corners)`) — `cornerradius` is wired but the v1 path draws plain rectangles.
