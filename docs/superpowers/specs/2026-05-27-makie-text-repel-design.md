@@ -28,9 +28,9 @@ realizes the "adjustText Option B" approach (pure-Julia solver, measure upfront)
 the measurement is now *accurate* rather than estimated, which was that approach's main
 weakness.
 
-## Verified environment facts (as of writing)
+## Verified environment facts (empirically validated against the live stack)
 
-- Installed: **Makie 0.24.10 / CairoMakie 0.15.10**.
+- Installed: **Julia 1.12.6**, **Makie 0.24.10 / CairoMakie 0.15.10**.
 - `textlabel` exists; uses the new `@recipe Name (args,) begin … end` style.
 - `string_boundingbox` is **deprecated** → use `full_boundingbox` / `text_bb`.
 - `register_projected_positions!` is exported — the clean data→pixel path (preferred over
@@ -89,11 +89,31 @@ wrapper re-calls on camera change.
 Dispatches on label type:
 
 - Plain `String` / `LaTeXString` → **TextMeasure** (`MakieBackend`): fast, no render pass,
-  deterministic.
-- `rich` / `RichText` → **Makie's own bbox** (`text_bb` / `full_boundingbox`): the one
-  place we accept a Makie-internal dependency, isolated behind the measurement interface.
+  deterministic. Empirically floating-point-identical to Makie's rendered boxes at
+  `px_per_unit = 1` (validated).
+- `rich` / `RichText` → **Makie's `full_boundingbox(plot, :pixel)` after a cheap render**.
+  Note: `Makie.text_bb` does **not** accept `RichText` (it `MethodError`s — plain strings
+  only), so rich labels require one throwaway `text!` + `full_boundingbox` pass to measure.
+  This is the one place we accept a Makie-internal dependency, isolated behind the
+  measurement interface.
 
 The solver and renderer don't care which measurer ran; they consume pixel box sizes.
+
+**Two caveats the measurement layer must handle (validated):**
+
+- **Font resolution.** `MakieBackend(font=...)` only accepts what `Makie.to_font` accepts
+  (`String` / `Vector{String}` / `FTFont` / `automatic`) — it rejects `Symbol`s like
+  `:bold`. The layer must resolve any `@inherit`/symbolic font to a `String`/`FTFont`
+  before constructing the backend.
+- **Glyph fallback.** TextMeasure sums glyph advances of the *resolved* font and does not
+  replicate Makie's per-glyph font-fallback substitution. If the chosen font lacks the
+  label's glyphs, TM's box diverges from Makie's. Defensive fallback: when the font
+  doesn't cover the text, route through Makie's `text_bb` (plain) /
+  `full_boundingbox` (rich) instead. Narrow real-world case (mismatched font/script).
+
+**Implication for the pipeline:** the "render once" promise holds for the **plain/LaTeX**
+path (render-free measurement). The **rich-text** path adds a cheap measure-render before
+the final render.
 
 **Follow-up:** [jowch/TextMeasure.jl#1](https://github.com/jowch/TextMeasure.jl/issues/1)
 requests rich-text measurement in TextMeasure. If implemented, we register it as the
@@ -110,6 +130,12 @@ textrepel!(ax, positions; text = labels, ...)     # positions::Vector{Point2}
 
 A recipe (vs. a plain function) gives theme integration, `Cycled` colors, axis
 attachment, and the reactive-ready seam — without wiring camera observables yet.
+
+The recipe macro declares one positional (`positions`) and exposes `text` as a keyword
+attribute, so `textrepel!(ax, positions; text = labels)` works for free (validated). The
+`textrepel!(ax, xs, ys; text = labels)` convenience form additionally requires a
+`Makie.convert_arguments` method turning `(xs, ys)` into `positions` — a small, standard
+addition to implement during the build.
 
 ```julia
 @recipe TextRepel (positions,) begin
@@ -159,8 +185,15 @@ solve_repel(anchors::Vector{Point2f},     # data points, in PIXELS
             params) -> (offsets::Vector{Vec2f}, dropped::BitVector)
 ```
 
-Everything in pixels. Anchors via `register_projected_positions!` (data→pixel); box sizes
-from the measurement layer. A label's current box = `anchor + offset ± size/2`.
+Everything in pixels. Anchors via `register_projected_positions!` (data→pixel; validated
+as exported and callable from inside `plot!`); box sizes from the measurement layer. A
+label's current box = `anchor + offset ± size/2`.
+
+Note (validated): `register_projected_positions!` yields **scene-local** pixels (origin at
+the axis/scene lower-left, not figure-absolute). This is the correct frame for
+`markerspace = :pixel` offsets, so the solver and the render hand-off stay consistent —
+but unit tests outside a recipe should use `Makie.project(scene, :data, :pixel, p)` (the
+one-shot escape hatch) and must not expect figure-absolute coordinates.
 
 Algorithm (deterministic adjustText engine):
 
