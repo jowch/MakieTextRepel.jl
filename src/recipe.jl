@@ -122,3 +122,13 @@ function Makie.plot!(p::TextRepel)
 
     return p
 end
+
+# Axis autolimits must track the data anchors only — the pixel-space offset
+# children (text, boxes, connectors) must not inflate the limits. The axis's
+# linear-scale path uses `boundingbox(scene, exclude)`, NOT `data_limits`, so we
+# must override BOTH (mirroring Makie's own `textlabel` recipe), otherwise the
+# `text!` child's pixel glyph extents leak into the data limits.
+Makie.data_limits(p::TextRepel) = Makie.data_limits(p.plots[1])
+Makie.data_limits(p::TextRepel{<:Tuple{<:AbstractVector{<:Point}}}) = Rect3d(p[1][])
+Makie.boundingbox(p::TextRepel, space::Symbol) =
+    Makie.apply_transform_and_model(p, Makie.data_limits(p))

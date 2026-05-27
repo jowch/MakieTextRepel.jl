@@ -67,3 +67,23 @@ end
     save(out, fig)
     @test isfile(out) && filesize(out) > 0
 end
+
+@testset "axis limits track data, not pixel offsets" begin
+    fig = Figure(); ax = Axis(fig[1, 1])
+    pts = Point2f[(1, 1), (1.1, 1.05), (1.05, 0.9), (2, 2), (2.05, 2.02)]
+    pl = textrepel!(ax, pts; text = ["a", "b", "c", "d", "e"])
+
+    # The recipe's own data_limits must report the anchor extent only.
+    dl = Makie.data_limits(pl)
+    @test dl.widths[1] < 5
+    @test dl.widths[2] < 5
+
+    # And — crucially — the ACTUAL axis autolimits must follow it. The axis uses
+    # boundingbox(scene, exclude) on the linear path, so this catches a leak that
+    # a data_limits-only check would miss. Data spans ~x∈[1,2.05], y∈[0.9,2.02];
+    # limits must stay near the data, not blow up to the pixel scale (~100+).
+    reset_limits!(ax)
+    lims = ax.finallimits[]
+    @test lims.widths[1] < 5
+    @test lims.widths[2] < 5
+end
