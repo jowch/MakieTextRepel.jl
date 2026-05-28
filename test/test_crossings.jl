@@ -41,3 +41,29 @@ end
     c4 = connector_for(Point2f(0, 0), Vec2f(11, 0), Vec2f(10, 6), false, params, 100.0)
     @test c4.drawn == false
 end
+
+using MakieTextRepel: find_crossings
+
+@testset "find_crossings" begin
+    # Two connectors that cross.
+    c1 = Connector(Point2f(2, 0), Point2f(0, 2), true)
+    c2 = Connector(Point2f(2, 2), Point2f(0, 0), true)
+    @test find_crossings([c1, c2]) == [(1, 2)]
+
+    # Same but second one undrawn → no crossing.
+    c2_off = Connector(c2.label_end, c2.anchor_end, false)
+    @test find_crossings([c1, c2_off]) == Tuple{Int,Int}[]
+
+    # Three connectors, two pairwise crossings.
+    c3 = Connector(Point2f(0, 0), Point2f(2, 2), true)
+    c4 = Connector(Point2f(2, 0), Point2f(0, 2), true)
+    c5 = Connector(Point2f(0, 1), Point2f(2, 1), true)
+    crossings = find_crossings([c3, c4, c5])
+    @test (1, 2) in crossings
+    @test issorted(crossings)  # lex-ordered
+
+    # No crossings on parallel lines.
+    c6 = Connector(Point2f(0, 0), Point2f(2, 0), true)
+    c7 = Connector(Point2f(0, 1), Point2f(2, 1), true)
+    @test find_crossings([c6, c7]) == Tuple{Int,Int}[]
+end

@@ -15,3 +15,24 @@ function segments_cross(p1::Point2f, p2::Point2f, p3::Point2f, p4::Point2f)
     return (d1 > 0 && d2 < 0 || d1 < 0 && d2 > 0) &&
            (d3 > 0 && d4 < 0 || d3 < 0 && d4 > 0)
 end
+
+"""
+Pairwise O(n²) scan over `connectors`. Returns lex-ordered `(i, j)` index
+pairs with `i < j` for every pair whose segments strictly cross.
+Undrawn connectors (`drawn == false`) are skipped.
+"""
+function find_crossings(connectors::Vector{Connector})
+    crossings = Tuple{Int,Int}[]
+    n = length(connectors)
+    for i in 1:n
+        connectors[i].drawn || continue
+        for j in (i+1):n
+            connectors[j].drawn || continue
+            if segments_cross(connectors[i].anchor_end, connectors[i].label_end,
+                              connectors[j].anchor_end, connectors[j].label_end)
+                push!(crossings, (i, j))
+            end
+        end
+    end
+    return crossings
+end
