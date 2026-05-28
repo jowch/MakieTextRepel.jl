@@ -8,10 +8,6 @@ are suppressed when (a) the label is dropped, (b) the anchor lies strictly
 inside the padded box (no clean segment), (c) the anchor-to-edge distance
 is less than `point_padding` (trim would invert direction), or (d) the
 visible segment length is below `min_len`.
-
-`point_padding` is a keyword argument so the recipe can ship the connector
-change before the recipe is rewired to forward the value (intermediate
-builds stay green).
 """
 function build_connectors(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
                           sizes::Vector{Vec2f}, dropped::BitVector,

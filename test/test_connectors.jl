@@ -87,6 +87,31 @@ end
     @test segs2[2] ≈ Point2f(3, 0)
 end
 
+@testset "build_connectors: point_padding × min_segment_length interaction" begin
+    # Both knobs binding together. Locks the step-4 anchor-trim short-circuit
+    # against the step-6 visible-length filter (the two new filters introduced
+    # in this PR).
+    anchors = [Point2f(0, 0)]
+    sizes = [Vec2f(20, 10)]
+    dropped = falses(1)
+
+    # Case A: anchor-to-edge = 3, point_padding = 2 → visible = 1.
+    #   min_segment_length = 2 → 1 ≤ 2 → suppressed.
+    # offset (13, 0), size (20, 10), pad=0: box x ∈ [3, 23], edge = (3, 0),
+    # dlen = 3 > ppad = 2, seg_start = (2, 0), visible = ‖(3,0) − (2,0)‖ = 1.
+    segs_a = build_connectors(anchors, [Vec2f(13, 0)], sizes, dropped, 2.0, 0.0;
+                              point_padding = 2.0)
+    @test isempty(segs_a)
+
+    # Case B: anchor-to-edge = 5, point_padding = 2 → visible = 3.
+    #   min_segment_length = 2 → 3 > 2 → emitted, seg_start trimmed.
+    segs_b = build_connectors(anchors, [Vec2f(15, 0)], sizes, dropped, 2.0, 0.0;
+                              point_padding = 2.0)
+    @test length(segs_b) == 2
+    @test segs_b[1] ≈ Point2f(2, 0)   # start trimmed by point_padding along +x
+    @test segs_b[2] ≈ Point2f(5, 0)   # ends at near box face
+end
+
 @testset "build_connectors: diagonal offset terminates on the limiting face" begin
     # Square box, equal diagonal offset → t = min(hw/|dx|, hh/|dy|), both equal,
     # corner endpoint.

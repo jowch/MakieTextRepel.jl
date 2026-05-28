@@ -25,11 +25,13 @@ starts with each anchor on or outside its label box. Subsumes the old
 "only fan out coincident anchors" behavior. Determinism: pure function of
 index and passed-in sizes.
 
-`psizes` is the *padded* size (the caller adds `2·box_padding`); the
-corner-distance computed here is therefore the corner of the padded box,
-guaranteeing the anchor lies on or outside it for any spiral angle. The
-`1.0f0` floor only binds for degenerate zero-size labels with zero
-padding (e.g. empty strings); in normal layouts it never fires.
+`psizes` is the *padded* size (the caller adds `2·box_padding`); `r` is the
+corner-distance of the padded box. The anchor lands *on* the box only at the
+four corner directions; at cardinal directions it lands `r − hw` (or `r − hh`)
+*outside* the box, so equilibrium distance after spring relaxation varies a few
+pixels by index. Acceptable for ggrepel-style layouts. The `1.0f0` floor only
+binds for degenerate zero-size labels with zero padding (e.g. empty strings);
+in normal layouts it never fires.
 """
 function init_offsets(anchors::Vector{Point2f}, psizes::Vector{Vec2f}, p::RepelParams)
     n = length(anchors)
@@ -109,7 +111,10 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                 f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             for j in 1:n
-                # Own anchor is included: keeps isolated labels off their own point.
+                # Own anchor is included: keeps isolated labels off their own
+                # point. `force_pull` (below) provides the inward balance, so
+                # the label settles near (not on) the anchor, at `≈ hw + pad +
+                # point_padding` along the dominant axis.
                 pp = point_push(boxes[i], anchors[j], pad)
                 f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
             end

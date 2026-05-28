@@ -94,6 +94,20 @@ end
     ox, _ = solve_repel(anchors, sizes, px)
     @test all(o -> o[2] == 0, ox)
 
+    # axis constraint: only_move = :y → zero x displacement. Symmetric to :x;
+    # also guards the `_constrain` wrap on init_offsets — without that wrap an
+    # x-component would leak from the new always-non-zero init. 20 labels
+    # exercise indices where sin(i·φ_g) is small (e.g. i=17, sin ≈ 0.041) and
+    # confirms own-anchor `point_push` still drives them well off the anchor
+    # (|offset_y| ≥ hh-pad), refuting any "label settles on anchor under :y"
+    # concern from the projection of the golden-angle init.
+    yanchors = [Point2f(i * 30, 0) for i in 1:20]
+    ysizes = fill(Vec2f(20, 10), 20)
+    py = RepelParams(box_padding = 0.0, only_move = :y)
+    oy, _ = solve_repel(yanchors, ysizes, py)
+    @test all(o -> o[1] == 0, oy)               # x stays locked
+    @test all(o -> abs(o[2]) >= 4.9f0, oy)      # all labels driven off anchor
+
     # stability: many coincident labels don't NaN
     co = fill(Point2f(0, 0), 8)
     cs = fill(Vec2f(15, 8), 8)
