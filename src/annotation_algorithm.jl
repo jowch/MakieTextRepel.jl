@@ -79,3 +79,65 @@ Returns `(iter = 0, residual = 0f0)` before any solve runs.
 """
 solve_stats(alg::TextRepelAlgorithm) =
     (iter = alg.last_iter[], residual = alg.last_residual[])
+
+function Makie.calculate_best_offsets!(
+        alg::TextRepelAlgorithm,
+        offsets::Vector{<:Vec2},
+        textpositions::Vector{<:Point2},
+        textpositions_offset::Vector{<:Point2},
+        text_bbs::Vector{<:Rect2},
+        bbox::Rect2;
+        maxiter::Union{Makie.Automatic, Int},
+        labelspace::Symbol,
+        reset::Bool,
+    )
+    n = length(offsets)
+    n == 0 && return
+
+    T = eltype(offsets)
+
+    # Per-label pinning detection (full implementation in Task 10).
+    pin_mask = BitVector([all(isfinite, p) for p in textpositions_offset])
+    pinned_offsets = Vector{Vec2f}(undef, n)
+    for i in 1:n
+        if pin_mask[i]
+            d = textpositions_offset[i] - textpositions[i]
+            pinned_offsets[i] = Vec2f(d[1], d[2])
+        else
+            pinned_offsets[i] = Vec2f(0, 0)
+        end
+    end
+
+    # All-pinned: bypass solver.
+    if all(pin_mask)
+        for i in 1:n
+            offsets[i] = T(pinned_offsets[i][1], pinned_offsets[i][2])
+        end
+        alg.last_iter[] = 0
+        alg.last_residual[] = 0f0
+        return
+    end
+
+    anchors = [Point2f(p[1], p[2]) for p in textpositions]
+    sizes   = [Vec2f(bb.widths[1], bb.widths[2]) for bb in text_bbs]
+    annotation_bounds = Rect2f(
+        Float32(bbox.origin[1]),  Float32(bbox.origin[2]),
+        Float32(bbox.widths[1]),  Float32(bbox.widths[2]),
+    )
+
+    mi = maxiter === Makie.automatic ? alg.params.max_iter : Int(maxiter)
+    effective_params = RepelParams(alg.params;
+        bounds   = annotation_bounds,
+        max_iter = mi,
+    )
+
+    result = solve_repel(anchors, sizes, effective_params)
+
+    alg.last_iter[] = result.iter
+    alg.last_residual[] = result.residual
+
+    for i in 1:n
+        offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
+    end
+    return
+end
