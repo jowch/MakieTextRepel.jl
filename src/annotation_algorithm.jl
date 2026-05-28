@@ -29,6 +29,10 @@ with `Makie.project`.
 - `bounds`/`max_overlaps` misuse warnings fire once per session (Julia's
   standard logger `maxlog=1` contract), so constructing multiple
   algorithm instances with the same mistake yields one warning total.
+- `solve_stats` returns the iter/residual of the **most recent** solve.
+  A single `TextRepelAlgorithm` instance shared across multiple plots
+  reports only the last one to call `calculate_best_offsets!`. Use
+  separate instances per plot if you need per-plot diagnostics.
 
 # Scope
 
@@ -55,7 +59,7 @@ function TextRepelAlgorithm(; obstacles::Vector{Rect2f} = Rect2f[],
         automatically from the axis viewport; remove this keyword." maxlog=1
 
     params = RepelParams(; kwargs...)
-    if params.max_overlaps !== Inf
+    if params.max_overlaps != Inf
         @warn "TextRepelAlgorithm: `max_overlaps` has no equivalent under \
             annotation!; use `textrepel!` if you need label dropping." maxlog=1
     end
@@ -64,7 +68,7 @@ end
 
 function TextRepelAlgorithm(params::RepelParams;
                             obstacles::Vector{Rect2f} = Rect2f[])
-    if params.max_overlaps !== Inf
+    if params.max_overlaps != Inf
         @warn "TextRepelAlgorithm: `max_overlaps` has no equivalent under \
             annotation!; use `textrepel!` if you need label dropping." maxlog=1
     end
@@ -100,22 +104,24 @@ function Makie.calculate_best_offsets!(
 
     T = eltype(offsets)
 
-    # Per-label pinning detection (full implementation in Task 10).
+    # Per-label pinning detection: finite textpositions_offset[i] entries
+    # become pinned offsets in *render-space* (i.e., the displacement
+    # annotation! will use when rendering — text_bb.origin + offset).
     pin_mask = BitVector([all(isfinite, p) for p in textpositions_offset])
-    pinned_offsets = Vector{Vec2f}(undef, n)
+    pinned_render = Vector{Vec2f}(undef, n)
     for i in 1:n
         if pin_mask[i]
             d = textpositions_offset[i] - textpositions[i]
-            pinned_offsets[i] = Vec2f(d[1], d[2])
+            pinned_render[i] = Vec2f(d[1], d[2])
         else
-            pinned_offsets[i] = Vec2f(0, 0)
+            pinned_render[i] = Vec2f(0, 0)
         end
     end
 
-    # All-pinned: bypass solver.
+    # All-pinned: bypass solver. Render-space offsets pass through unchanged.
     if all(pin_mask)
         for i in 1:n
-            offsets[i] = T(pinned_offsets[i][1], pinned_offsets[i][2])
+            offsets[i] = T(pinned_render[i][1], pinned_render[i][2])
         end
         alg.last_iter[] = 0
         alg.last_residual[] = 0f0
@@ -135,56 +141,65 @@ function Makie.calculate_best_offsets!(
         max_iter = mi,
     )
 
+    # Coordinate translation between solver-space and render-space.
+    #
+    # The solver places bbox.center at `anchor + solver_offset` (it reasons
+    # about box centers). annotation! renders the bbox at
+    # `text_bb.origin + render_offset`, whose center is therefore
+    # `text_bb.origin + render_offset + widths/2`. Equating the two so the
+    # rendered bbox matches what the solver solved for:
+    #     render_offset = solver_offset - (text_bb.origin + widths/2 - anchor)
+    #                   = solver_offset - align_bias
+    # For centered text (text_bb.origin = anchor - widths/2) align_bias is
+    # zero; for L/R/T/B-aligned text it is non-zero and must be subtracted
+    # from every solver result before writeback, and added to every
+    # render-space input before handoff to the solver (including warm-start
+    # init_state and pinned obstacle positions).
+    bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
+                            bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
+    align_bias = Vec2f[Vec2f(c[1] - a[1], c[2] - a[2])
+                       for (c, a) in zip(bbox_centers, anchors)]
+
+    # Pinned offsets: convert render-space → solver-space so the pinned
+    # bboxes act as obstacles at their *rendered* position.
+    pinned_solver = Vec2f[pin_mask[i] ? pinned_render[i] + align_bias[i] :
+                                        Vec2f(0, 0) for i in 1:n]
+
     # Initial state for the solver:
-    # - reset=true (fresh): pre-bias to bbox_center so own-anchor repulsion
-    #   pushes from the data point. Returned offsets get align_bias added back
-    #   so annotation! receives a displacement reflecting the bbox alignment.
-    # - reset=false (warm-start): incoming offsets are textposition-relative
-    #   from the previous solve (annotation! writes back whatever we put in
-    #   `offsets`, so warm-starting needs no coordinate change). They go in
-    #   directly and come out directly.
+    # - reset=true: fresh start. align_bias places the box at bbox_center;
+    #   golden-angle spiral (same one solve_repel's init_offsets uses) breaks
+    #   ties for coincident anchors so they fan out instead of collapsing.
+    # - reset=false: warm-start from the previous render-space offsets,
+    #   translated to solver-space by adding align_bias.
     if reset
-        bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
-                                bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
-        align_bias = Vec2f[Vec2f(c[1] - a[1], c[2] - a[2])
-                           for (c, a) in zip(bbox_centers, anchors)]
-        # Tie-break for coincident anchors: add per-index golden-angle
-        # perturbation. Same spiral the solver uses internally for
-        # init_offsets — without it, coincident anchors with identical
-        # bboxes share an init_state and collapse.
         psizes = Vec2f[sizes[i] .+ 2 * Float32(alg.params.box_padding) for i in 1:n]
         spiral = init_offsets(anchors, psizes, alg.params)
         init_state = Vec2f[align_bias[i] + spiral[i] for i in 1:n]
     else
-        init_state = Vec2f[Vec2f(o[1], o[2]) for o in offsets]
+        init_state = Vec2f[Vec2f(offsets[i][1], offsets[i][2]) + align_bias[i]
+                           for i in 1:n]
     end
 
     result = solve_repel(anchors, sizes, effective_params;
                          obstacles      = alg.obstacles,
                          init_state     = init_state,
                          pin_mask       = pin_mask,
-                         pinned_offsets = pinned_offsets)
+                         pinned_offsets = pinned_solver)
 
     alg.last_iter[] = result.iter
     alg.last_residual[] = result.residual
 
+    # Writeback: solver-space → render-space. Pinned indices recover
+    # `pinned_render[i]` exactly because Task 5 guarantees
+    # `result.offsets[i] == pinned_solver[i]` for pinned `i`, and
+    # `pinned_solver[i] - align_bias[i] == pinned_render[i]`.
     for i in 1:n
-        if pin_mask[i]
-            offsets[i] = T(pinned_offsets[i][1], pinned_offsets[i][2])
-        elseif reset
-            o = result.offsets[i] .+ align_bias[i]
-            if all(isfinite, o)
-                offsets[i] = T(o[1], o[2])
-            else
-                # Solver produced NaN/Inf — fall back to zero offset for this label.
-                offsets[i] = T(0, 0)
-            end
+        o = result.offsets[i] .- align_bias[i]
+        if all(isfinite, o)
+            offsets[i] = T(o[1], o[2])
         else
-            if all(isfinite, result.offsets[i])
-                offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
-            else
-                offsets[i] = T(0, 0)
-            end
+            # Solver produced NaN/Inf — fall back to zero offset for this label.
+            offsets[i] = T(0, 0)
         end
     end
     return

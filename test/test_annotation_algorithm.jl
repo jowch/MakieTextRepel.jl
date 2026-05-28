@@ -180,35 +180,59 @@ end
     @test offsets[2][2] ≈ 30f0
 end
 
-@testset "dispatch — alignment-correct anchor (D5)" begin
-    # Same textposition, same widths, two different alignments.
+@testset "dispatch — alignment is incorporated (D5)" begin
+    # Same textposition and widths, two text_bb.origin conventions
+    # (centered vs left-aligned). The wrapper must detect the alignment
+    # and write different offsets for the two cases — otherwise annotation!
+    # would render both bboxes shifted by `widths/2` relative to each
+    # other in screen space. The substantive geometric check (rendered
+    # bbox stays inside the viewport when the solver clamps it inside)
+    # lives in "non-centered bbox near wall stays in bounds" below; this
+    # test just confirms the alignment is detected. (D5 is also implicitly
+    # exercised by every centered-bbox test, where align_bias is zero.)
     textpositions        = [Point2f(50, 50)]
     textpositions_offset = [Point2f(NaN, NaN)]
     viewport             = Rect2f(0, 0, 500, 500)
 
-    # Center-aligned bbox: origin = textposition - widths/2.
     text_bbs_center = [Rect2f(30, 45, 40, 10)]
     offsets_center  = [Vec2f(0, 0)]
     Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets_center,
         textpositions, textpositions_offset, text_bbs_center, viewport;
         maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
 
-    # Left-aligned bbox: origin = textposition (bbox extends right).
     text_bbs_left = [Rect2f(50, 45, 40, 10)]
     offsets_left  = [Vec2f(0, 0)]
     Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets_left,
         textpositions, textpositions_offset, text_bbs_left, viewport;
         maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
 
-    # With the alignment fix, the left-aligned solve's offset is shifted
-    # right relative to the centered one (align_bias is added to init_state).
-    # Without the fix, both solves are anchored identically and the delta
-    # would be ~0. The spiral perturbation (added in the tie-breaking fix)
-    # amplifies the divergence beyond the bare 20 px bias, so we assert
-    # direction rather than a tight magnitude: delta[1] must be clearly
-    # positive (left-aligned starts further right → finishes further right).
-    delta = offsets_left[1] - offsets_center[1]
-    @test delta[1] > 10f0
+    @test offsets_left[1] != offsets_center[1]
+    # Sanity: centered solve actually repels the bbox off the anchor.
+    @test norm(offsets_center[1]) > 15.0
+end
+
+@testset "dispatch — non-centered bbox near wall stays in bounds" begin
+    # Left-aligned label near the right wall. The solver clamps the bbox
+    # inside bounds in solver-space; the alignment translation must carry
+    # that through so the *rendered* bbox is also inside bounds. Pre-fix,
+    # the writeback double-shifted by align_bias and the label escaped the
+    # viewport by ~widths/2.
+    textpositions        = [Point2f(480, 250)]
+    textpositions_offset = [Point2f(NaN, NaN)]
+    text_bbs             = [Rect2f(480, 245, 80, 10)]  # left-aligned, extends right past 500
+    viewport             = Rect2f(0, 0, 500, 500)
+    offsets              = [Vec2f(0, 0)]
+
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets,
+        textpositions, textpositions_offset, text_bbs, viewport;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    rx = text_bbs[1].origin[1] + offsets[1][1]
+    ry = text_bbs[1].origin[2] + offsets[1][2]
+    @test rx                          >= viewport.origin[1]
+    @test rx + text_bbs[1].widths[1]  <= viewport.origin[1] + viewport.widths[1]
+    @test ry                          >= viewport.origin[2]
+    @test ry + text_bbs[1].widths[2]  <= viewport.origin[2] + viewport.widths[2]
 end
 
 @testset "dispatch — warm-start when reset == false" begin
@@ -424,7 +448,7 @@ end
     @test solve_stats(alg).iter <= 1000
 end
 
-@testset "dispatch — labelspace = :data invariance" begin
+@testset "dispatch — labelspace is a no-op (does not reach solver)" begin
     n = 2
     textpositions = [Point2f(0, 0), Point2f(100, 0)]
     textpositions_offset = fill(Point2f(NaN, NaN), n)

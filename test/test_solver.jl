@@ -83,32 +83,31 @@ end
     @test empty_result.offsets == Vec2f[]
     @test empty_result.dropped == falses(0)
     @test empty_result.iter == 0
-    o1, d1 = solve_repel([Point2f(5, 5)], [Vec2f(10, 4)], p)
+    r1 = solve_repel([Point2f(5, 5)], [Vec2f(10, 4)], p)
     # Single label: own-anchor repulsion now active. The spring pulls inward from
     # init but cannot reach 0; equilibrium sits inside the init radius.
-    @test norm(o1[1]) > 0
+    @test norm(r1.offsets[1]) > 0
     # Init magnitude for label size (10, 4) and box_padding = 0:
     # r_init = sqrt(5^2 + 2^2) ≈ 5.39. Final |offset| must be < this (spring
     # pulled inward).
-    @test norm(o1[1]) < 5.4f0
-    @test d1 == falses(1)
+    @test norm(r1.offsets[1]) < 5.4f0
+    @test r1.dropped == falses(1)
 
     # two overlapping labels separate
     anchors = [Point2f(0, 0), Point2f(2, 0)]
     sizes = [Vec2f(20, 10), Vec2f(20, 10)]
-    offsets, dropped = solve_repel(anchors, sizes, p)
-    @test !_any_overlap(anchors, offsets, sizes, p.box_padding)
-    @test !any(dropped)
+    r2 = solve_repel(anchors, sizes, p)
+    @test !_any_overlap(anchors, r2.offsets, sizes, p.box_padding)
+    @test !any(r2.dropped)
 
     # determinism: identical inputs → identical outputs
-    o_a, _ = solve_repel(anchors, sizes, p)
-    o_b, _ = solve_repel(anchors, sizes, p)
-    @test o_a == o_b
+    @test solve_repel(anchors, sizes, p).offsets ==
+          solve_repel(anchors, sizes, p).offsets
 
     # axis constraint: only_move = :x → zero y displacement
     px = RepelParams(box_padding = 0.0, only_move = :x)
-    ox, _ = solve_repel(anchors, sizes, px)
-    @test all(o -> o[2] == 0, ox)
+    rx = solve_repel(anchors, sizes, px)
+    @test all(o -> o[2] == 0, rx.offsets)
 
     # axis constraint: only_move = :y → zero x displacement. Symmetric to :x;
     # also guards the `_constrain` wrap on init_offsets — without that wrap an
@@ -120,15 +119,15 @@ end
     yanchors = [Point2f(i * 30, 0) for i in 1:20]
     ysizes = fill(Vec2f(20, 10), 20)
     py = RepelParams(box_padding = 0.0, only_move = :y)
-    oy, _ = solve_repel(yanchors, ysizes, py)
-    @test all(o -> o[1] == 0, oy)               # x stays locked
-    @test all(o -> abs(o[2]) >= 4.9f0, oy)      # all labels driven off anchor
+    ry = solve_repel(yanchors, ysizes, py)
+    @test all(o -> o[1] == 0, ry.offsets)               # x stays locked
+    @test all(o -> abs(o[2]) >= 4.9f0, ry.offsets)      # all labels driven off anchor
 
     # stability: many coincident labels don't NaN
     co = fill(Point2f(0, 0), 8)
     cs = fill(Vec2f(15, 8), 8)
-    oc, _ = solve_repel(co, cs, RepelParams())
-    @test all(o -> all(isfinite, o), oc)
+    rc = solve_repel(co, cs, RepelParams())
+    @test all(o -> all(isfinite, o), rc.offsets)
 end
 
 using MakieTextRepel: compute_drops, clamp_box_offset
@@ -160,9 +159,9 @@ end
     anchors = [Point2f(5, 5), Point2f(195, 5), Point2f(5, 115),
                Point2f(195, 115), Point2f(100, 60)]
     sizes = fill(Vec2f(40, 16), 5)
-    offsets, _ = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = bounds))
+    r = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = bounds))
     for i in eachindex(anchors)
-        b = pbox(anchors, offsets, sizes, i)
+        b = pbox(anchors, r.offsets, sizes, i)
         @test b.origin[1] >= -1e-2
         @test b.origin[2] >= -1e-2
         @test b.origin[1] + b.widths[1] <= 200 + 1e-2
@@ -170,14 +169,14 @@ end
     end
 
     # bounds = nothing is the same as not passing bounds at all (clamp truly off)
-    a = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = nothing))[1]
-    b = solve_repel(anchors, sizes, RepelParams(box_padding = pad))[1]
+    a = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = nothing)).offsets
+    b = solve_repel(anchors, sizes, RepelParams(box_padding = pad)).offsets
     @test a == b
 
     # degenerate: label wider than bounds → pinned, finite, no NaN
-    big, _ = solve_repel([Point2f(100, 60)], [Vec2f(400, 10)],
-                         RepelParams(box_padding = 0.0, bounds = bounds))
-    @test all(isfinite, big[1])
+    big = solve_repel([Point2f(100, 60)], [Vec2f(400, 10)],
+                      RepelParams(box_padding = 0.0, bounds = bounds))
+    @test all(isfinite, big.offsets[1])
 end
 
 @testset "solve_repel clamp respects only_move" begin
@@ -187,8 +186,8 @@ end
     anchors = [Point2f(195, 130)]
     sizes = [Vec2f(40, 20)]
     bounds = Rect2f(0, 0, 200, 100)
-    ox  = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = bounds))[1]
-    oxn = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = nothing))[1]
+    ox  = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = bounds)).offsets
+    oxn = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = nothing)).offsets
     @test abs(ox[1][2] - oxn[1][2]) < 1e-3        # clamp left the forbidden y axis alone
     bx = box_at(anchors[1], ox[1], sizes[1])
     @test bx.origin[1] >= -1e-3                   # x still confined
@@ -209,8 +208,8 @@ end
     sizes = fill(Vec2f(46, 18), 5)
     pa = RepelParams(box_padding = 2.0, bounds = bounds, max_iter = 3000)
     pb = RepelParams(box_padding = 2.0, bounds = bounds, max_iter = 3001)
-    oa = solve_repel(anchors, sizes, pa)[1]
-    ob = solve_repel(anchors, sizes, pb)[1]
+    oa = solve_repel(anchors, sizes, pa).offsets
+    ob = solve_repel(anchors, sizes, pb).offsets
     @test maximum(norm.(oa .- ob)) < 1.0   # converged, not limit-cycling
     @test all(o -> all(isfinite, o), oa)
 end
@@ -221,12 +220,12 @@ end
     co = fill(Point2f(0, 0), 6)
     cs = [Vec2f(20, 10), Vec2f(15, 12), Vec2f(25, 8),
           Vec2f(18, 14), Vec2f(22, 9), Vec2f(16, 11)]
-    offs, _ = solve_repel(co, cs, RepelParams(box_padding = 2.0))
-    @test all(o -> all(isfinite, o), offs)
-    @test !_any_overlap(co, offs, cs, 2.0; tol = 0.5)
+    r = solve_repel(co, cs, RepelParams(box_padding = 2.0))
+    @test all(o -> all(isfinite, o), r.offsets)
+    @test !_any_overlap(co, r.offsets, cs, 2.0; tol = 0.5)
     # No two offsets identical (golden-angle init guarantees distinct seeds).
-    for i in 1:length(offs), j in (i+1):length(offs)
-        @test offs[i] != offs[j]
+    for i in 1:length(r.offsets), j in (i+1):length(r.offsets)
+        @test r.offsets[i] != r.offsets[j]
     end
 end
 
