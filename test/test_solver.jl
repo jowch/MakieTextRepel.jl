@@ -1,24 +1,42 @@
 # test_solver.jl
-using MakieTextRepel: RepelParams, explode_init
+using MakieTextRepel: RepelParams, init_offsets, box_at
 using GeometryBasics
 using LinearAlgebra
 
-@testset "explode_init" begin
+@testset "init_offsets" begin
     p = RepelParams()
 
-    # distinct anchors → no initial nudge
+    # distinct anchors → every label gets a deterministic golden-angle offset
     anchors = [Point2f(0, 0), Point2f(100, 100)]
-    sizes = [Vec2f(10, 10), Vec2f(10, 10)]
-    @test explode_init(anchors, sizes, p) == [Vec2f(0, 0), Vec2f(0, 0)]
+    sizes = [Vec2f(10, 10), Vec2f(10, 10)]   # CALLER passes PADDED sizes; here pad=0 for simplicity
+    o1 = init_offsets(anchors, sizes, p)
+    o2 = init_offsets(anchors, sizes, p)
+    @test o1 == o2                              # deterministic
+    @test norm(o1[1]) > 0 && norm(o1[2]) > 0    # every label moved off (0,0)
+    @test o1[1] != o1[2]                        # distinct angles per label
 
-    # coincident anchors → later ones nudged off-origin, deterministically
+    # Geometric invariant: at the init offset, the anchor lies ON or OUTSIDE the
+    # (passed-in, already-padded) box of the label.
+    for i in eachindex(anchors)
+        box = box_at(anchors[i], o1[i], sizes[i])
+        c = box.origin .+ box.widths ./ 2
+        d = anchors[i] .- c
+        hw, hh = box.widths[1] / 2, box.widths[2] / 2
+        @test abs(d[1]) >= hw - 1e-4 || abs(d[2]) >= hh - 1e-4   # on or outside
+    end
+
+    # coincident anchors → still get distinct golden-angle offsets
     co = [Point2f(0, 0), Point2f(0, 0), Point2f(0, 0)]
     cs = [Vec2f(10, 10), Vec2f(10, 10), Vec2f(10, 10)]
-    off1 = explode_init(co, cs, p)
-    off2 = explode_init(co, cs, p)
-    @test off1 == off2                 # deterministic
-    @test norm(off1[2]) > 0            # second coincident label nudged
-    @test norm(off1[3]) > 0
+    occ = init_offsets(co, cs, p)
+    @test occ[1] != occ[2]
+    @test occ[2] != occ[3]
+    @test occ[1] != occ[3]
+
+    # zero-size label (empty string) → r_min floor produces a non-zero offset
+    zero_sz = [Vec2f(0, 0)]
+    zero_anchor = [Point2f(0, 0)]
+    @test norm(init_offsets(zero_anchor, zero_sz, p)[1]) >= 1.0f0 - 1e-4
 end
 
 using MakieTextRepel: solve_repel
@@ -50,7 +68,13 @@ end
     # empty / single
     @test solve_repel(Point2f[], Vec2f[], p) == (Vec2f[], falses(0))
     o1, d1 = solve_repel([Point2f(5, 5)], [Vec2f(10, 4)], p)
-    @test o1 == [Vec2f(0, 0)]          # single label never moves
+    # Single label: own-anchor repulsion now active. The spring pulls inward from
+    # init but cannot reach 0; equilibrium sits inside the init radius.
+    @test norm(o1[1]) > 0
+    # Init magnitude for label size (10, 4) and box_padding = 0:
+    # r_init = sqrt(5^2 + 2^2) ≈ 5.39. Final |offset| must be < this (spring
+    # pulled inward).
+    @test norm(o1[1]) < 5.4f0
     @test d1 == falses(1)
 
     # two overlapping labels separate
@@ -69,6 +93,20 @@ end
     px = RepelParams(box_padding = 0.0, only_move = :x)
     ox, _ = solve_repel(anchors, sizes, px)
     @test all(o -> o[2] == 0, ox)
+
+    # axis constraint: only_move = :y → zero x displacement. Symmetric to :x;
+    # also guards the `_constrain` wrap on init_offsets — without that wrap an
+    # x-component would leak from the new always-non-zero init. 20 labels
+    # exercise indices where sin(i·φ_g) is small (e.g. i=17, sin ≈ 0.041) and
+    # confirms own-anchor `point_push` still drives them well off the anchor
+    # (|offset_y| ≥ hh-pad), refuting any "label settles on anchor under :y"
+    # concern from the projection of the golden-angle init.
+    yanchors = [Point2f(i * 30, 0) for i in 1:20]
+    ysizes = fill(Vec2f(20, 10), 20)
+    py = RepelParams(box_padding = 0.0, only_move = :y)
+    oy, _ = solve_repel(yanchors, ysizes, py)
+    @test all(o -> o[1] == 0, oy)               # x stays locked
+    @test all(o -> abs(o[2]) >= 4.9f0, oy)      # all labels driven off anchor
 
     # stability: many coincident labels don't NaN
     co = fill(Point2f(0, 0), 8)
@@ -159,4 +197,19 @@ end
     ob = solve_repel(anchors, sizes, pb)[1]
     @test maximum(norm.(oa .- ob)) < 1.0   # converged, not limit-cycling
     @test all(o -> all(isfinite, o), oa)
+end
+
+@testset "solve_repel: own-anchor repulsion fans out coincident clusters" begin
+    # 5+ labels at the same anchor, varying sizes. All finite, all distinct,
+    # no two boxes still overlapping after solve.
+    co = fill(Point2f(0, 0), 6)
+    cs = [Vec2f(20, 10), Vec2f(15, 12), Vec2f(25, 8),
+          Vec2f(18, 14), Vec2f(22, 9), Vec2f(16, 11)]
+    offs, _ = solve_repel(co, cs, RepelParams(box_padding = 2.0))
+    @test all(o -> all(isfinite, o), offs)
+    @test !_any_overlap(co, offs, cs, 2.0; tol = 0.5)
+    # No two offsets identical (golden-angle init guarantees distinct seeds).
+    for i in 1:length(offs), j in (i+1):length(offs)
+        @test offs[i] != offs[j]
+    end
 end
