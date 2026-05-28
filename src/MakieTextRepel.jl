@@ -9,6 +9,7 @@ export textrepel, textrepel!
 
 include("geometry.jl")
 include("voronoi.jl")
+include("init.jl")
 include("solver.jl")
 include("connectors.jl")
 include("crossings.jl")

@@ -77,3 +77,31 @@ using MakieTextRepel: voronoi_cells
     a2 = voronoi_cells([Point2f(10, 10), Point2f(50, 50), Point2f(90, 90), Point2f(10, 90)], viewport)
     @test a1 == a2
 end
+
+using MakieTextRepel: slot_offset, IMHOF_ORDER
+
+@testset "Imhof slots" begin
+    p = 2.0f0
+    w = 10.0f0
+    h = 6.0f0
+
+    # All 8 directions, with anchor at origin and label center at the returned offset.
+    # Verify each slot positions the label so the anchor sits outside the axis-aligned
+    # padded box (one edge of the box is at distance p from the anchor).
+    expected = Dict(
+        :TR => Vec2f(p + w/2,  p + h/2),
+        :R  => Vec2f(p + w/2,  0),
+        :T  => Vec2f(0,        p + h/2),
+        :BR => Vec2f(p + w/2, -p - h/2),
+        :L  => Vec2f(-p - w/2, 0),
+        :BL => Vec2f(-p - w/2, -p - h/2),
+        :B  => Vec2f(0,       -p - h/2),
+        :TL => Vec2f(-p - w/2,  p + h/2),
+    )
+    for (slot, expect) in expected
+        @test slot_offset(slot, Vec2f(w, h), p) ≈ expect
+    end
+
+    # Preference order
+    @test IMHOF_ORDER == (:TR, :R, :T, :BR, :L, :BL, :B, :TL)
+end
