@@ -289,3 +289,36 @@ end
         text_bbs, Rect2f(0, 0, 500, 500);
         maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
 end
+
+@testset "dispatch — obstacles avoidance" begin
+    n = 1
+    # Place a single label with initial bbox overlapping an obstacle.
+    # The solver should displace it to avoid the obstacle.
+    textpositions = [Point2f(50, 50)]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    # Bbox: 40-60 in x, 45-55 in y. This overlaps with the obstacle below.
+    text_bbs = [Rect2f(40, 45, 20, 10)]
+    bbox     = Rect2f(0, 0, 200, 100)
+
+    # Obstacle at 35-55 in x, 48-68 in y — overlaps with the label's initial bbox.
+    obstacle = Rect2f(35, 48, 20, 20)
+    alg = TextRepelAlgorithm(obstacles = [obstacle], max_iter = 1000)
+    offsets = [Vec2f(0, 0) for _ in 1:n]
+
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # After solve, the rendered bbox should not overlap the obstacle.
+    rendered = Rect2f(text_bbs[1].origin[1] + offsets[1][1],
+                      text_bbs[1].origin[2] + offsets[1][2],
+                      text_bbs[1].widths[1],
+                      text_bbs[1].widths[2])
+    no_overlap = (rendered.origin[1] + rendered.widths[1] <= obstacle.origin[1] ||
+                  obstacle.origin[1] + obstacle.widths[1] <= rendered.origin[1] ||
+                  rendered.origin[2] + rendered.widths[2] <= obstacle.origin[2] ||
+                  obstacle.origin[2] + obstacle.widths[2] <= rendered.origin[2])
+    @test no_overlap
+end

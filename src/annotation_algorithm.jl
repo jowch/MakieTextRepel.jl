@@ -152,6 +152,7 @@ function Makie.calculate_best_offsets!(
     end
 
     result = solve_repel(anchors, sizes, effective_params;
+                         obstacles      = alg.obstacles,
                          init_state     = init_state,
                          pin_mask       = pin_mask,
                          pinned_offsets = pinned_offsets)
