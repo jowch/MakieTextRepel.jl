@@ -43,3 +43,42 @@ crowded ones), `background` (boxed labels), `segments`/`segmentcolor`/`linewidth
 Three layers: **measure** (pixel box sizes via TextMeasure.jl; rich text via Makie),
 **solve** (a deterministic force-directed solver in pixel space), **render** (text +
 optional boxes + connectors). Output is deterministic — same data, same figure.
+
+## Two surfaces
+
+MakieTextRepel exposes two ways to get repelled labels into a plot:
+
+### `textrepel!`
+
+A standalone Makie recipe with the full feature set: force-directed
+solver, dropping (`max_overlaps`), background boxes, and pixel-space
+connector trimming.
+
+```julia
+using MakieTextRepel
+scatter!(ax, points)
+textrepel!(ax, points; text = labels, only_move = :y)
+```
+
+Use when you need any of those features, or for the default ggrepel /
+adjustText workflow.
+
+### `TextRepelAlgorithm`
+
+An algorithm plug-in for `Makie.annotation!`. Reuses the same
+force-directed solver underneath `annotation!`'s styling
+(`Ann.Styles.LineArrow()`, custom paths, arrow heads).
+
+```julia
+using MakieTextRepel
+scatter!(ax, points)
+annotation!(ax, points; text = labels,
+            algorithm = TextRepelAlgorithm(only_move = :y))
+```
+
+Also supports per-label pinning (mix finite and `NaN` entries in
+`textpositions_offset`) and obstacle avoidance via the `obstacles`
+keyword.
+
+Use when you want MakieTextRepel's solver underneath `annotation!`'s
+arrow styling.
