@@ -13,13 +13,11 @@ labels = ["node $(i)" for i in 1:n]
 
 fig = Figure(size = (1000, 480), fontsize = 15)
 
-ax1 = Axis(fig[1, 1]; title = "text! (overlapping)", aspect = 1,
-           xautolimitmargin = (0.12, 0.12), yautolimitmargin = (0.12, 0.12))
+ax1 = Axis(fig[1, 1]; title = "text! (overlapping)", aspect = 1)
 scatter!(ax1, xs, ys; color = :tomato, markersize = 9)
 text!(ax1, xs, ys; text = labels, align = (:left, :bottom), fontsize = 13)
 
-ax2 = Axis(fig[1, 2]; title = "textrepel! (resolved)", aspect = 1,
-           xautolimitmargin = (0.12, 0.12), yautolimitmargin = (0.12, 0.12))
+ax2 = Axis(fig[1, 2]; title = "textrepel! (resolved)", aspect = 1)
 scatter!(ax2, xs, ys; color = :tomato, markersize = 9)
 textrepel!(ax2, xs, ys; text = labels, fontsize = 13)
 
