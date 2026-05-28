@@ -3,7 +3,7 @@
 **Status:** Approved for implementation
 **Date:** 2026-05-28
 **Tracking issues:** #8 (deferred Julia-native solvers), #9 (deferred Bentley-Ottmann)
-**Revision:** r4 — rebased on main after the `annotation-algorithm-spike` PR (#10) landed. r1 → r2 changed dependency to `DelaunayTriangulation.jl`, corrected diagonal Imhof slot padding for AABB semantics, weakened the sparse-data non-crossing claim, re-grounded the termination proof on label-center distances, added `dropped` plumbing through the crossings pass, specified `only_move`/n<3/NaN handling, and added release-prep items. r2 → r3 softened the strict-decrease claim for the collinear-degenerate case, anchored the NaN/Inf guard at `voronoi_cells`, rewrote the integration test snippet to use real API shape, noted the `clip_polygon` Tuple form, and trimmed two aspirational items. r3 → r4 (a) retargets the solver integration onto the spike-landed `solve_repel` kwarg API (`init_state`, NamedTuple return, `RepelParams(base; ...)` copy constructor); (b) retains `init_offsets` and `_GOLDEN_ANGLE` because `src/annotation_algorithm.jl` calls them as the `reset=true` warm-start path; (c) refreshes `src/solver.jl` line references to post-spike values.
+**Revision:** r4 — rebased on main after the `annotation-algorithm-spike` PR (#10) landed, then reviewer-converged. r1 → r2 changed dependency to `DelaunayTriangulation.jl`, corrected diagonal Imhof slot padding for AABB semantics, weakened the sparse-data non-crossing claim, re-grounded the termination proof on label-center distances, added `dropped` plumbing through the crossings pass, specified `only_move`/n<3/NaN handling, and added release-prep items. r2 → r3 softened the strict-decrease claim for the collinear-degenerate case, anchored the NaN/Inf guard at `voronoi_cells`, rewrote the integration test snippet to use real API shape, noted the `clip_polygon` Tuple form, and trimmed two aspirational items. r3 → r4 (a) retargets the solver integration onto the spike-landed `solve_repel` kwarg API (`init_state`, NamedTuple return, `RepelParams(base; ...)` copy constructor); (b) retains `init_offsets` and `_GOLDEN_ANGLE` because `src/annotation_algorithm.jl` calls them as the `reset=true` warm-start path; (c) refreshes `src/solver.jl` line references to post-spike values; (d) scopes the non-crossing guarantee to `textrepel!` only (not `TextRepelAlgorithm`); (e) corrects `initial_offsets` return type to `Vec2f`; (f) adds `min_len` to the `connector_for`/`repair_crossings!` signatures; (g) documents `min_segment_length` re-solve cost and the `_constrain`/export contracts on the new init functions.
 
 ## Motivation
 
@@ -21,7 +21,7 @@ Together they produce **typically** non-crossing layouts on sparse data (because
 
 ## Goals
 
-- Eliminate leader-line crossings in all rendered output (hard guarantee, provided by the repair pass).
+- Eliminate leader-line crossings in all `textrepel!` output (hard guarantee, provided by the repair pass). `TextRepelAlgorithm` (the `Makie.annotation!` plug-in shipped in spike PR #10) does **not** inherit this guarantee in v0.2 — `calculate_best_offsets!` calls `solve_repel` directly and has no repair step. Extending the guarantee to that path is tracked separately.
 - Use Imhof-preferred slot positions (TR > R > T > BR > L > BL > B > TL) when geometry allows.
 - Preserve v0.1's determinism contract: same input → bit-exact same output.
 - No new public attributes; v0.1 caller code runs unchanged.
@@ -118,8 +118,10 @@ All eight slots place the label so that the anchor lies outside the **axis-align
 Preference order (Imhof 1962, refined by Liao et al. 2024): **TR > R > T > BR > L > BL > B > TL**. The order is a compile-time constant; not exposed as an attribute in v0.2.
 
 ```julia
-initial_offsets(anchors, sizes, cells, params)::Vector{Point2f}
+initial_offsets(anchors, sizes, cells, params)::Vector{Vec2f}
 ```
+
+The return-type is `Vec2f` (matching v0.1's `solve_repel` offset convention), not `Point2f`. The plan's "Type conventions" section documents this in detail.
 
 For each anchor:
 - Iterate slots in preference order.
@@ -128,6 +130,10 @@ For each anchor:
 - After slot selection, apply `_constrain(offset, params.only_move)` so the existing `only_move = :x | :y | :both` semantics are honored from the very first iteration.
 
 This is the new initialization entry point for the `textrepel!` pipeline. Naming uses `initial_offsets` (with the trailing `s`) to disambiguate from the existing `init_offsets` at `src/solver.jl:48-59`, which is retained because `src/annotation_algorithm.jl:176` calls it for the `reset = true` warm-start path. The `_GOLDEN_ANGLE` constant at `src/solver.jl:31` is also retained for the same reason. The recipe pipeline switches to `initial_offsets`; the annotation-algorithm pipeline continues to use `init_offsets`.
+
+Neither `init_offsets` nor `initial_offsets` is exported from the module; both stay module-internal and are reached only by `using MakieTextRepel: …` in tests or by explicit module qualification. Keeping them un-exported avoids surfacing the name pair to end users (where it would invite mistakes).
+
+Within `initial_offsets`, `_constrain(offset, params.only_move)` is applied to every returned offset, so the returned vector is already constrained when handed to `solve_repel`. `solve_repel` (`src/solver.jl:107`) re-applies `_constrain` on its `init_state` path as a defensive invariant; the double application is idempotent and intentional, with each call site documenting its own contract at its own boundary.
 
 ### Solver abstraction (`src/solvers/`)
 
@@ -160,7 +166,7 @@ struct Connector
     drawn::Bool             # mirrors build_connectors suppression, INCLUDING dropped
 end
 
-connector_for(anchor, offset, size, dropped::Bool, params)::Connector
+connector_for(anchor, offset, size, dropped::Bool, params, min_len::Real)::Connector
 ```
 
 The `drawn` flag captures four conditions matching `src/connectors.jl:21-30` exactly:
@@ -170,7 +176,7 @@ The `drawn` flag captures four conditions matching `src/connectors.jl:21-30` exa
 3. Trim inverts direction (`dlen <= ppad`)
 4. Visible length below `min_segment_length`
 
-The `dropped` parameter is new in v0.2 and is what makes the `drawn` flag a faithful predicate. Both `build_connectors` (`src/connectors.jl:12-34`) and `repair_crossings!` call `connector_for` with the dropped flags vector indexed per label — single source of truth.
+The `dropped` parameter is new in v0.2 and is what makes the `drawn` flag a faithful predicate. `min_len` is the `min_segment_length` threshold for condition 4; it lives on the recipe attribute, not `RepelParams`, so it is passed explicitly. Both `build_connectors` (`src/connectors.jl:12-34`) and `repair_crossings!` call `connector_for` with the dropped flags vector indexed per label — single source of truth.
 
 #### Crossing predicate
 
@@ -191,9 +197,9 @@ Naive O(n²) pairwise iteration over `drawn == true` connectors, returning lex-o
 #### Repair
 
 ```julia
-function repair_crossings!(offsets, anchors, sizes, dropped, params; max_iter = 100)
+function repair_crossings!(offsets, anchors, sizes, dropped, params; min_len::Real, max_iter = 100)
     for iter in 1:max_iter
-        connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params)
+        connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
                       for i in eachindex(offsets)]
         crossings = find_crossings(connectors)
         isempty(crossings) && return iter - 1
@@ -238,7 +244,9 @@ Termination is therefore **not** guaranteed by `S` strictly decreasing in all ca
 
 ## Reactivity
 
-The recipe's single `lift` node already depends on `(anchors, sizes, params, bounds_obs)` (`src/recipe.jl:74-90` post-spike). The new pipeline is pure over the same observables — Voronoi computation, initialization, solver call, and repair pass are all pure functions of those inputs. **One new reactive dependency:** `min_segment_length` joins the lift because `repair_crossings!` uses it to determine which connectors are visible (and therefore eligible to cross). A single `lift` continues to drive the whole pipeline.
+The recipe's single `lift` node already depends on `(px_anchors, text, fontsize, font, force, force_point, force_pull, max_iter, only_move, box_padding, point_padding, max_overlaps, bounds_obs)` (`src/recipe.jl:74-90` post-spike). The new pipeline is pure over the same observables — Voronoi computation, initialization, solver call, and repair pass are all pure functions of those inputs. **One new reactive dependency:** `min_segment_length` joins the lift because `repair_crossings!` uses it to determine which connectors are visible (and therefore eligible to cross). A single `lift` continues to drive the whole pipeline.
+
+**Cost note.** Because `min_segment_length` now triggers a full pipeline re-run (Voronoi → init → solver → repair), a user who attaches it to a slider for interactive tuning will pay the solver cost on every change even though only the repair pass actually consumes it. This is acceptable for v0.2 — single-lift architecture is the simpler choice — and a split-lift optimization (downstream repair lift consuming `min_segment_length`, upstream solver lift not) is deferred to v0.3+.
 
 ## Backward compatibility
 
@@ -311,8 +319,9 @@ test/
     sizes      = attrs[:computed_sizes][]
     px_anchors = attrs[:computed_anchors][]
     params     = attrs[:computed_params][]
+    min_len    = plt.min_segment_length[]
 
-    connectors = [connector_for(px_anchors[i], offsets[i], sizes[i], dropped[i], params)
+    connectors = [connector_for(px_anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
                   for i in eachindex(offsets)]
 
     @test all(isfinite, offsets)

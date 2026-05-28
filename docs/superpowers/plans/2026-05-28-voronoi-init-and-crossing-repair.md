@@ -22,7 +22,6 @@
 - `src/solvers/force.jl` — `ForceSolver` wrapping `solve_repel`
 - `test/test_init.jl` — Voronoi cell + Imhof slot + initial-offsets unit tests
 - `test/test_crossings.jl` — segments_cross, find_crossings, swap_positions!, repair_crossings! unit tests
-- `CHANGELOG.md` — new, v0.2 first entry
 
 **Modified:**
 - `Project.toml` — add `DelaunayTriangulation` dep + compat; bump version to `0.2.0`
@@ -32,7 +31,7 @@
 - `test/runtests.jl` — include new test files
 - `test/test_connectors.jl` — light edits for `connector_for` factoring
 - `test/test_integration.jl` — add pipeline invariant test
-- `CHANGELOG.md` — close out the "Unreleased" 0.1.0 section and add a new `## [0.2.0]` section above it
+- `CHANGELOG.md` — exists from spike PR #10; this plan closes out the "Unreleased" 0.1.0 section and adds a new `## [0.2.0]` section above it
 
 **Untouched by this plan:**
 - `src/solver.jl` — `solve_repel` already accepts the `init_state` kwarg (from spike PR #10). `init_offsets` and `_GOLDEN_ANGLE` are RETAINED because `src/annotation_algorithm.jl` calls `init_offsets` for the `reset=true` warm-start at `src/annotation_algorithm.jl:176`. The new `src/init.jl` defines `initial_offsets` (with trailing `s`) so the names don't collide.
@@ -1226,18 +1225,9 @@ end
 
 - [ ] **Step 5: Update module includes**
 
-Edit `src/MakieTextRepel.jl` (current state, post-spike):
+`src/MakieTextRepel.jl` is edited incrementally across multiple tasks — Tasks 2, 3 (and later 4, 6, 7, 10) each append one or two `include(...)` lines for the file they create. By the time Task 12 reaches this step, the file may already contain entries for `crossings.jl`, `voronoi.jl`, `init.jl`, and other earlier-task files in append order.
 
-```julia
-include("geometry.jl")
-include("solver.jl")
-include("connectors.jl")
-include("measure.jl")
-include("recipe.jl")
-include("annotation_algorithm.jl")
-```
-
-Insert the v0.2 includes so `voronoi.jl`/`init.jl` come after `solver.jl` (they don't depend on it but stay grouped), and `crossings.jl` comes after `connectors.jl` (it depends on `connector_for` from Task 7). The `solvers/` files go after `solver.jl`. `annotation_algorithm.jl` stays last because it depends on `solver.jl` and `recipe.jl` is unchanged. Final order:
+Open `src/MakieTextRepel.jl`, replace the entire include block (every line between `import TextMeasure` and `end # module …`) with this final order:
 
 ```julia
 include("geometry.jl")
@@ -1252,6 +1242,8 @@ include("measure.jl")
 include("recipe.jl")
 include("annotation_algorithm.jl")
 ```
+
+Topology rationale: `solvers/` depend on `solver.jl` (`RepelParams`, `solve_repel`); `crossings.jl` depends on `connector_for` from `connectors.jl` (Task 7); `voronoi.jl`/`init.jl` depend on `_constrain`/`box_at` from `solver.jl`/`geometry.jl`; `annotation_algorithm.jl` stays last because it depends on `solver.jl`'s `init_offsets`.
 
 - [ ] **Step 6: Run, expect pass**
 
@@ -1273,9 +1265,9 @@ git commit -m "Add AbstractClusterSolver + ForceSolver wrapping solve_repel"
 **Files:**
 - Modify: `src/recipe.jl`
 
-- [ ] **Step 1: Modify the `lift` node in `Makie.plot!`**
+- [ ] **Step 1: Replace the whole `solved = lift(...) end` expression in `Makie.plot!`**
 
-Replace the body of the `solved = lift(...) do ... end` at lines 74–90 of `src/recipe.jl` with:
+Replace the entire `lift` call — from `solved = lift(` on line 74 through the closing `end` on line 90 of `src/recipe.jl` — with the block below. The replacement adds `p.min_segment_length` as a new lift input and `ml` as a new destructured argument; the previous "13 inputs, 13 destructured names" shape becomes "14 inputs, 14 destructured names." If you only replace the `do ... end` body and leave the input list intact, `ml` will be undefined and the recipe will throw on first solve.
 
 ```julia
     solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
