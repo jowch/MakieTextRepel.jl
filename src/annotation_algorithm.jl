@@ -93,6 +93,8 @@ function Makie.calculate_best_offsets!(
     )
     n = length(offsets)
     n == 0 && return
+    length(textpositions) == n || throw(DimensionMismatch(
+        "textpositions length $(length(textpositions)) does not match offsets length $n"))
 
     T = eltype(offsets)
 
@@ -131,17 +133,25 @@ function Makie.calculate_best_offsets!(
         max_iter = mi,
     )
 
-    # Alignment pre-bias (D5): init the solver with the label already at bbox_center
-    # so own-anchor repulsion pushes from the data point, not the bbox center.
-    # We also add align_bias to the final offsets so annotation! gets the correct
-    # displacement for non-center alignments.
-    bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
-                            bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
-    align_bias   = [Vec2f(c[1] - a[1], c[2] - a[2])
-                    for (c, a) in zip(bbox_centers, anchors)]
+    # Initial state for the solver:
+    # - reset=true (fresh): pre-bias to bbox_center so own-anchor repulsion
+    #   pushes from the data point. Returned offsets get align_bias added back
+    #   so annotation! receives a displacement reflecting the bbox alignment.
+    # - reset=false (warm-start): incoming offsets are textposition-relative
+    #   from the previous solve; they go in directly and come out directly.
+    if reset
+        bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
+                                bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
+        align_bias = Vec2f[Vec2f(c[1] - a[1], c[2] - a[2])
+                           for (c, a) in zip(bbox_centers, anchors)]
+        init_state = align_bias
+    else
+        align_bias = Vec2f[Vec2f(0, 0) for _ in 1:n]
+        init_state = Vec2f[Vec2f(o[1], o[2]) for o in offsets]
+    end
 
     result = solve_repel(anchors, sizes, effective_params;
-                         init_state     = align_bias,
+                         init_state     = init_state,
                          pin_mask       = pin_mask,
                          pinned_offsets = pinned_offsets)
 

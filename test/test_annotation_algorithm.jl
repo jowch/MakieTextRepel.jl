@@ -208,3 +208,84 @@ end
     @test isapprox(delta[1], 20f0, atol = 5.0)
     @test isapprox(delta[2], 0f0,  atol = 5.0)
 end
+
+@testset "dispatch — warm-start when reset == false" begin
+    n = 3
+    textpositions = [Point2f(0, 0), Point2f(100, 0), Point2f(200, 0)]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 2000, 2000)   # large viewport; (500, 500) is far inside
+
+    # Modest max_iter so neither solve converges; step_max small so neither
+    # can fully traverse from (500, 500) to equilibrium.
+    alg = TextRepelAlgorithm(max_iter = 10, step_max = 5.0)
+
+    # Warm-start: pre-populated extreme offsets, reset = false.
+    offsets_warm = [Vec2f(500, 500) for _ in 1:n]
+    Makie.calculate_best_offsets!(alg, offsets_warm,
+        textpositions, textpositions_offset, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
+
+    # Fresh-start: same pre-populated input, but reset = true (solver
+    # discards offsets and uses init_offsets / align_bias instead).
+    offsets_fresh = [Vec2f(500, 500) for _ in 1:n]
+    Makie.calculate_best_offsets!(alg, offsets_fresh,
+        textpositions, textpositions_offset, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # Warm-start preserves position relative to fresh-start. Each
+    # warm-start offset is closer to (500, 500) than its fresh counterpart.
+    for i in 1:n
+        @test norm(offsets_warm[i] - Vec2f(500, 500)) <
+              norm(offsets_fresh[i] - Vec2f(500, 500))
+    end
+end
+
+@testset "dispatch — warm-start preserves own-anchor invariant (R3)" begin
+    # After equilibrium under reset=true (PR #7 guarantees the anchor lies
+    # outside each label's bbox), a subsequent reset=false solve should
+    # maintain that invariant — warm-start mustn't degenerate the layout.
+    n = 4
+    textpositions = [Point2f(50i, 50) for i in 1:n]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 15, p[2] - 5, 30, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+
+    alg = TextRepelAlgorithm(max_iter = 500)
+    offsets = [Vec2f(0, 0) for _ in 1:n]
+
+    # Solve to equilibrium.
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+        text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # Continue from equilibrium with warm-start.
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+        text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
+
+    # Own-anchor invariant: each rendered bbox does NOT contain its anchor.
+    for i in 1:n
+        rendered = Rect2f(text_bbs[i].origin[1] + offsets[i][1],
+                          text_bbs[i].origin[2] + offsets[i][2],
+                          text_bbs[i].widths[1],
+                          text_bbs[i].widths[2])
+        contains_x = textpositions[i][1] >= rendered.origin[1] &&
+                     textpositions[i][1] <= rendered.origin[1] + rendered.widths[1]
+        contains_y = textpositions[i][2] >= rendered.origin[2] &&
+                     textpositions[i][2] <= rendered.origin[2] + rendered.widths[2]
+        @test !(contains_x && contains_y)
+    end
+end
+
+@testset "dispatch — reset=false with mismatched offsets length errors" begin
+    alg = TextRepelAlgorithm()
+    textpositions = [Point2f(0, 0), Point2f(100, 0)]
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    # offsets length is 1 but textpositions length is 2.
+    offsets = [Vec2f(0, 0)]
+    @test_throws DimensionMismatch Makie.calculate_best_offsets!(
+        alg, offsets, textpositions, fill(Point2f(NaN, NaN), 2),
+        text_bbs, Rect2f(0, 0, 500, 500);
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
+end
