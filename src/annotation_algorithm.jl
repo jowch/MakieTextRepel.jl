@@ -141,14 +141,20 @@ function Makie.calculate_best_offsets!(
                     for (c, a) in zip(bbox_centers, anchors)]
 
     result = solve_repel(anchors, sizes, effective_params;
-                         init_state = align_bias)
+                         init_state     = align_bias,
+                         pin_mask       = pin_mask,
+                         pinned_offsets = pinned_offsets)
 
     alg.last_iter[] = result.iter
     alg.last_residual[] = result.residual
 
     for i in 1:n
-        o = result.offsets[i] .+ align_bias[i]
-        offsets[i] = T(o[1], o[2])
+        if pin_mask[i]
+            offsets[i] = T(pinned_offsets[i][1], pinned_offsets[i][2])
+        else
+            o = result.offsets[i] .+ align_bias[i]
+            offsets[i] = T(o[1], o[2])
+        end
     end
     return
 end

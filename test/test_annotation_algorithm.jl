@@ -116,6 +116,70 @@ end
     @test solve_stats(alg) == (iter = 0, residual = 0f0)
 end
 
+@testset "dispatch — per-label pinning (mixed mode)" begin
+    n = 3
+    textpositions = [Point2f(0, 0), Point2f(100, 0), Point2f(200, 0)]
+    # Pin label 2 at (110, 30); labels 1 and 3 auto.
+    textpositions_offset = [Point2f(NaN, NaN), Point2f(110, 30), Point2f(NaN, NaN)]
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    alg = TextRepelAlgorithm()
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # Pinned label: offset is exactly the pin (relative to its textposition).
+    @test offsets[2][1] ≈ 10f0   # 110 - 100
+    @test offsets[2][2] ≈ 30f0
+
+    # Auto-placed labels: not zero (solver ran).
+    @test offsets[1] != Vec2f(0, 0)
+    @test offsets[3] != Vec2f(0, 0)
+
+    # Pinned bbox acts as an obstacle for auto-placed labels:
+    # neither auto label's rendered bbox overlaps the pinned label's
+    # rendered bbox.
+    function _rendered(i)
+        Rect2f(text_bbs[i].origin[1] + offsets[i][1],
+               text_bbs[i].origin[2] + offsets[i][2],
+               text_bbs[i].widths[1],
+               text_bbs[i].widths[2])
+    end
+    pinned_rect = _rendered(2)
+    for i in (1, 3)
+        r = _rendered(i)
+        overlaps_x = !(r.origin[1] + r.widths[1] <= pinned_rect.origin[1] ||
+                       pinned_rect.origin[1] + pinned_rect.widths[1] <= r.origin[1])
+        overlaps_y = !(r.origin[2] + r.widths[2] <= pinned_rect.origin[2] ||
+                       pinned_rect.origin[2] + pinned_rect.widths[2] <= r.origin[2])
+        @test !(overlaps_x && overlaps_y)
+    end
+end
+
+@testset "dispatch — pin × only_move bypasses constraint (D6)" begin
+    textpositions = [Point2f(0, 0), Point2f(100, 0)]
+    # Pin label 2 with non-zero x component; alg uses only_move = :y.
+    textpositions_offset = [Point2f(NaN, NaN), Point2f(120, 30)]
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:2]
+
+    alg = TextRepelAlgorithm(only_move = :y)
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # The pinned label keeps its x component (20 px) despite only_move = :y.
+    @test offsets[2][1] ≈ 20f0
+    @test offsets[2][2] ≈ 30f0
+end
+
 @testset "dispatch — alignment-correct anchor (D5)" begin
     # Same textposition, same widths, two different alignments.
     textpositions        = [Point2f(50, 50)]
