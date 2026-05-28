@@ -88,6 +88,26 @@ end
     @test lims.widths[2] < 5
 end
 
+@testset "connectors suppressed when clamp pins anchor inside its own label" begin
+    # Tiny viewport (100×80) + wide label anchored at the data midpoint: the
+    # label box (≈154 px wide) is wider than the axis viewport (≈43 px), so the
+    # clamp pins it to the lower edge while the anchor, projecting to pixel
+    # (≈2, ≈1), sits strictly inside the clamped box. The connector layer's
+    # strict-inside check (clip_to_box_edge → nothing) suppresses the segment.
+    # Locks the post-Task-4 behavior; relies on the bumped default
+    # point_padding = 2.0 to ensure the clamped box is large enough to contain
+    # the anchor.
+    fig = Figure(size = (100, 80)); ax = Axis(fig[1, 1])
+    pts = Point2f[(0.5, 0.5)]
+    pl = textrepel!(ax, pts; text = ["a-very-wide-label-name"],
+                    segments = true, min_segment_length = 0.0)
+    Makie.update_state_before_display!(fig.scene)
+
+    seg_plots = filter(c -> c isa LineSegments, pl.plots)
+    @test length(seg_plots) == 1
+    @test isempty(seg_plots[1][1][])
+end
+
 @testset "clamping keeps labels inside the axis viewport" begin
     fig = Figure(size = (420, 360)); ax = Axis(fig[1, 1])
     pts = Point2f[(0, 0), (1, 0), (0, 1), (1, 1), (0.5, 0.5)]

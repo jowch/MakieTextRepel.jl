@@ -19,16 +19,16 @@
     # ── Spacing / dropping ──
     "Pixels of padding around each label box for the solver."
     box_padding = 4.0
-    "Pixel halo around each data point."
-    point_padding = 0.0
+    "Pixel halo around each data point — used both by the solver (repulsion halo) and by the connector layer (gap between the marker and the start of the leader line)."
+    point_padding = 2.0
     "Drop labels overlapping more than this many others (Inf = keep all)."
     max_overlaps = Inf
 
     # ── Connector segments ──
     "Draw connector lines from points to displaced labels."
     segments = true
-    "Suppress a connector if the label moved fewer than this many pixels."
-    min_segment_length = 5.0
+    "Suppress a connector if its *visible* length (anchor end trimmed by `point_padding`, label end clipped to box face) is fewer than this many pixels."
+    min_segment_length = 2.0
     "Connector color."
     segmentcolor = :gray60
     "Connector width."
@@ -119,10 +119,10 @@ function Makie.plot!(p::TextRepel)
         fontsize = p.fontsize, font = p.font, color = p.color, align = p.align)
 
     # 4. Connector segments (pixel space; coexists with data-space text anchors).
-    seg_points = lift(solved, p.min_segment_length, p.box_padding, p.segments) do s, ml, bp, on
+    seg_points = lift(solved, p.min_segment_length, p.box_padding, p.point_padding, p.segments) do s, ml, bp, pp, on
         on || return Point2f[]
         build_connectors(s.anchors, s.offsets, s.sizes, s.dropped,
-                         Float64(ml), Float64(bp))
+                         Float64(ml), Float64(bp); point_padding = Float64(pp))
     end
     linesegments!(p, seg_points; space = :pixel,
         color = p.segmentcolor, linewidth = p.linewidth, visible = p.segments)
