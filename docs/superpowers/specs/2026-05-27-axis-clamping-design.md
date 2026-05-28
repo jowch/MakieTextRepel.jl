@@ -64,10 +64,13 @@ feature needs nothing new from it.
   the run: at iteration `it`, use `step_max · max(0, 1 − it/max_iter)` instead of a
   constant `step_max`. Without this, tightly edge-crowded labels pinned against a
   boundary settle into a period-2 limit cycle (overlap-push vs. spring) and spin to
-  `max_iter` rather than converging. This is a **pre-existing** base-solver weakness
-  (the same crowded inputs fail to converge with `bounds = nothing` too) that clamping
-  merely exposes; cooling fixes it generally and is deterministic (no new parameter,
-  no effect on the non-crowded cases that already converge in a few iterations).
+  `max_iter` rather than converging. Cooling is applied **only on the clamped path**
+  (`bounds !== nothing`): the recipe always sets `bounds`, so every real `textrepel!`
+  call gets the fix, while the bare `bounds = nothing` solver path keeps a constant
+  step cap and stays **byte-identical** to its pre-clamping output (no consumer relies
+  on the unclamped path, and gating cooling there avoids silently changing shipped
+  behavior). Cooling is deterministic (no new parameter) and has no effect on
+  non-crowded clamped cases, which converge in a few iterations before it bites.
 
 ### Clamp helper (`src/geometry.jl`)
 

@@ -91,8 +91,11 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
 
     for it in 1:p.max_iter
         # Step-cap cooling: linearly decay the per-iteration move cap so crowded,
-        # wall-pinned labels settle instead of limit-cycling. Deterministic.
-        smax = smax0 * max(0f0, 1f0 - Float32(it) / Float32(p.max_iter))
+        # wall-pinned labels settle instead of limit-cycling. Deterministic. Applied
+        # only on the clamped path — the recipe always sets bounds, while the bare
+        # `bounds === nothing` solver path stays byte-identical to its pre-clamping output.
+        smax = p.bounds === nothing ? smax0 :
+               smax0 * max(0f0, 1f0 - Float32(it) / Float32(p.max_iter))
         boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
         Δ = Vector{Vec2f}(undef, n)
         for i in 1:n
