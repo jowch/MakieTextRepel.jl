@@ -7,5 +7,6 @@ using Test
     include("test_connectors.jl")
     include("test_measure.jl")
     include("test_integration.jl")
+    include("test_crossings.jl")
     include("test_annotation_algorithm.jl")
 end

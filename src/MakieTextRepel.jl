@@ -10,6 +10,7 @@ export textrepel, textrepel!
 include("geometry.jl")
 include("solver.jl")
 include("connectors.jl")
+include("crossings.jl")
 include("measure.jl")
 include("recipe.jl")
 include("annotation_algorithm.jl")
