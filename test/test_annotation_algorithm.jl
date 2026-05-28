@@ -391,3 +391,96 @@ end
                   obstacle.origin[2] + obstacle.widths[2] <= rendered.origin[2])
     @test no_overlap
 end
+
+@testset "dispatch — maxiter precedence" begin
+    n = 2
+    textpositions = [Point2f(0, 0), Point2f(100, 0)]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+
+    alg = TextRepelAlgorithm(max_iter = 1000)
+    offsets = [Vec2f(0, 0) for _ in 1:n]
+
+    # Explicit maxiter overrides alg.params.max_iter.
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = 5,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+    @test solve_stats(alg).iter <= 5
+
+    # Makie.automatic falls through to alg.params.max_iter.
+    fill!(offsets, Vec2f(0, 0))
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+    @test solve_stats(alg).iter <= 1000
+end
+
+@testset "dispatch — labelspace = :data invariance" begin
+    n = 2
+    textpositions = [Point2f(0, 0), Point2f(100, 0)]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+
+    alg = TextRepelAlgorithm()
+
+    offsets_rel = [Vec2f(0, 0) for _ in 1:n]
+    Makie.calculate_best_offsets!(alg, offsets_rel, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    offsets_data = [Vec2f(0, 0) for _ in 1:n]
+    Makie.calculate_best_offsets!(alg, offsets_data, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :data,
+                                  reset = true)
+
+    # labelspace doesn't reach the solver — same input → same output.
+    @test offsets_rel == offsets_data
+end
+
+@testset "dispatch — StaticArrays broadcast canary" begin
+    # The dispatch uses per-element T(x, y) construction rather than
+    # broadcast assignment to avoid StaticArrays broadcasting into each
+    # element. This test asserts the path runs cleanly on Vector{Vec2f}.
+    n = 3
+    offsets = Vector{Vec2f}([Vec2f(0, 0) for _ in 1:n])
+    textpositions = [Point2f(i * 50, 50) for i in 1:n]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+
+    @test_nowarn Makie.calculate_best_offsets!(TextRepelAlgorithm(),
+                                               offsets, textpositions, textpositions_offset,
+                                               text_bbs, Rect2f(0, 0, 500, 500);
+                                               maxiter = Makie.automatic,
+                                               labelspace = :relative_pixel,
+                                               reset = true)
+end
+
+@testset "dispatch — solve_stats populated after real solve" begin
+    n = 3
+    textpositions = [Point2f(i * 50, 50) for i in 1:n]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    alg = TextRepelAlgorithm()
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    s = solve_stats(alg)
+    @test s.iter > 0
+    @test s.residual >= 0f0
+end
