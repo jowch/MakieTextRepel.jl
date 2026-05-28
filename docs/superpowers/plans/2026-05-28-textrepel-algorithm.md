@@ -23,10 +23,11 @@ These five tasks land in the solver and recipe before any wrapper code exists. A
 **Goal:** Change `solve_repel`'s return from `(offsets, dropped)` to `(; offsets, dropped, iter, residual)`. Update the recipe destructure. Existing solver tests continue to pass.
 
 **Files:**
-- Modify: `src/solver.jl:144` (return statement)
-- Modify: `src/solver.jl:97-142` (track iter and residual)
-- Modify: `src/recipe.jl:87` (destructure update)
+- Modify: `src/solver.jl` — `solve_repel` function body and return
+- Modify: `src/recipe.jl` — one destructure of `solve_repel`'s return
 - Test: `test/test_solver.jl` (existing tests; verify they still pass)
+
+**Note on file references:** From this task onward, anchor on code patterns rather than line numbers — the line numbers shift after each task. Anchors used below: the `for it in 1:p.max_iter` loop, the `return (offsets, compute_drops(...))` statement, the `n == 0 && return` early return, and `offsets, dropped = solve_repel(anchors, sizes, params)` in `recipe.jl`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -56,39 +57,31 @@ Expected: FAIL inside the new testset; existing solver-output tests that destruc
 
 - [ ] **Step 3: Modify `src/solver.jl` to track diagnostics and return NamedTuple**
 
-Change the function body. The key edits:
+Three edits to `solve_repel`. Find each anchor pattern and apply the change:
 
-At line 96 (just before the iteration loop), add:
+**Edit 1.** Replace the early-return for `n == 0` (the line reading `n == 0 && return (Vec2f[], falses(0))`):
+
+```julia
+    n == 0 && return (; offsets = Vec2f[], dropped = falses(0), iter = 0, residual = 0f0)
+```
+
+**Edit 2.** Just before the line `for it in 1:p.max_iter`, add two tracking variables:
 
 ```julia
     final_iter = 0
     final_residual = 0f0
 ```
 
-Then change line 97 (`for it in 1:p.max_iter`) and the body. At the bottom of the loop body, just after `maxmove < p.tol && break` (currently line 141), the loop already breaks on convergence. Track the iter and residual at the end of every iteration. Modify lines 127-142 to:
+**Edit 3.** Inside the iteration loop, just before the `maxmove < p.tol && break` line, capture the trackers:
 
 ```julia
-        maxmove = 0f0
-        for i in 1:n
-            d = _constrain(_clamp_step(Δ[i], smax), p.only_move)
-            newoff = offsets[i] .+ d
-            if p.bounds !== nothing
-                box = box_at(anchors[i], newoff, psizes[i])
-                # Constrain the clamp shift too, so confinement never moves a label
-                # along an axis the user locked via only_move.
-                newoff = newoff .+ _constrain(clamp_box_offset(box, p.bounds), p.only_move)
-            end
-            move = newoff .- offsets[i]
-            offsets[i] = newoff
-            maxmove = max(maxmove, norm(move))
-        end
         final_iter = it
         final_residual = maxmove
         maxmove < p.tol && break
     end
 ```
 
-And change the return at line 144 to:
+**Edit 4.** Replace the return statement (the line `return (offsets, compute_drops(anchors, offsets, psizes, p.max_overlaps))`):
 
 ```julia
     return (;
@@ -99,28 +92,16 @@ And change the return at line 144 to:
     )
 ```
 
-Also update the early-return on line 84:
-
-```julia
-    n == 0 && return (; offsets = Vec2f[], dropped = falses(0), iter = 0, residual = 0f0)
-```
-
 - [ ] **Step 4: Update the recipe destructure**
 
-Modify `src/recipe.jl:87`. The current line:
-
-```julia
-        offsets, dropped = solve_repel(anchors, sizes, params)
-```
-
-Change to:
+In `src/recipe.jl`, find the line `offsets, dropped = solve_repel(anchors, sizes, params)` and replace it with:
 
 ```julia
         s = solve_repel(anchors, sizes, params)
         offsets, dropped = s.offsets, s.dropped
 ```
 
-Verify no other call sites consume the return of `solve_repel` — `grep -n 'solve_repel(' src/` should show only solver.jl (definition) and recipe.jl:87.
+Verify no other call sites consume the return of `solve_repel` — `grep -n 'solve_repel(' src/` should show only solver.jl (definition) and recipe.jl.
 
 - [ ] **Step 5: Run tests to verify all pass**
 
@@ -148,7 +129,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 **Goal:** Add a constructor that takes a base `RepelParams` and a set of overrides, so the wrapper can override `bounds` and `max_iter` without rebuilding from scratch.
 
 **Files:**
-- Modify: `src/solver.jl:17` (after the struct definition, before line 19 `const _GOLDEN_ANGLE`)
+- Modify: `src/solver.jl` — add constructor after the `Base.@kwdef struct RepelParams ... end` block
 - Test: `test/test_solver.jl`
 
 - [ ] **Step 1: Write the failing test**
@@ -177,7 +158,7 @@ Expected: FAIL with `MethodError: no method matching RepelParams(::RepelParams; 
 
 - [ ] **Step 3: Add the constructor in `src/solver.jl`**
 
-Insert immediately after line 17 (the closing `end` of the `@kwdef` struct):
+Insert immediately after the `Base.@kwdef struct RepelParams ... end` block (before the `const _GOLDEN_ANGLE = ...` line):
 
 ```julia
 """
@@ -219,20 +200,35 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 **Goal:** Extend the solver so user-supplied axis-aligned rectangles act as additional repulsion sources, the same way data anchors do via `point_push`.
 
 **Files:**
-- Modify: `src/solver.jl:82` (function signature + point_push loop)
+- Modify: `src/solver.jl` — `solve_repel` signature and force loop
 - Test: `test/test_solver.jl`
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `test/test_solver.jl`:
+`box_at` and `_overlaps` are internal helpers and aren't exported, so the test computes label bboxes inline. Add to `test/test_solver.jl`:
 
 ```julia
 @testset "solve_repel — obstacles kwarg" begin
+    # Helper: compute the label's padded bbox at its final offset, fully
+    # inline so the test doesn't depend on internal helper exports.
+    function _label_bbox(anchor::Point2f, offset::Vec2f, size::Vec2f, pad::Real)
+        psize = size .+ 2 * Float32(pad)
+        center = anchor .+ offset
+        Rect2f(center[1] - psize[1]/2, center[2] - psize[2]/2,
+               psize[1], psize[2])
+    end
+    function _overlaps(a::Rect2f, b::Rect2f)
+        return !(a.origin[1] + a.widths[1] <= b.origin[1] ||
+                 b.origin[1] + b.widths[1] <= a.origin[1] ||
+                 a.origin[2] + a.widths[2] <= b.origin[2] ||
+                 b.origin[2] + b.widths[2] <= a.origin[2])
+    end
+
     # Two labels on either side of an obstacle. Without the obstacle they
-    # would settle close to their anchors; the obstacle pushes them apart.
+    # settle close to their anchors; the obstacle pushes them clear.
     anchors = [Point2f(0, 50), Point2f(100, 50)]
     sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
-    p = RepelParams(max_iter = 200, point_padding = 0.0)
+    p = RepelParams(max_iter = 500, point_padding = 0.0)
     obstacle = Rect2f(40, 40, 20, 20)   # blocks the corridor between them
 
     # Sanity: empty obstacles vector === no-op vs not passing obstacles at all.
@@ -243,29 +239,18 @@ Add to `test/test_solver.jl`:
     # With an obstacle, neither resulting bbox overlaps it.
     c = solve_repel(anchors, sizes, p; obstacles = [obstacle])
     for i in 1:2
-        bb = box_at(anchors[i], c.offsets[i],
-                    sizes[i] .+ 2 * Float32(p.box_padding))
-        @test !_overlaps(bb, obstacle)   # uses existing geometry helper
+        bb = _label_bbox(anchors[i], c.offsets[i], sizes[i], p.box_padding)
+        @test !_overlaps(bb, obstacle)
     end
 
-    # Multiple disjoint obstacles: same invariant.
+    # Multiple disjoint obstacles: same invariant for each.
     obs2 = [Rect2f(40, 40, 20, 20), Rect2f(40, 10, 20, 20)]
     d = solve_repel(anchors, sizes, p; obstacles = obs2)
     for i in 1:2, o in obs2
-        bb = box_at(anchors[i], d.offsets[i],
-                    sizes[i] .+ 2 * Float32(p.box_padding))
+        bb = _label_bbox(anchors[i], d.offsets[i], sizes[i], p.box_padding)
         @test !_overlaps(bb, o)
     end
 end
-```
-
-This test calls `_overlaps`, which doesn't exist as a public helper. Add it (or inline) as a small helper near the top of `test/test_solver.jl` if not present:
-
-```julia
-_overlaps(a::Rect2f, b::Rect2f) = !(a.origin[1] + a.widths[1] <= b.origin[1] ||
-                                     b.origin[1] + b.widths[1] <= a.origin[1] ||
-                                     a.origin[2] + a.widths[2] <= b.origin[2] ||
-                                     b.origin[2] + b.widths[2] <= a.origin[2])
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -275,20 +260,14 @@ Expected: FAIL with `MethodError: no method matching solve_repel(...; obstacles=
 
 - [ ] **Step 3: Modify `src/solver.jl` solve_repel signature and force loop**
 
-Change line 82 from:
-
-```julia
-function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
-```
-
-to:
+**Edit 1.** Find the `function solve_repel(...)` signature and add the kwarg:
 
 ```julia
 function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams;
                      obstacles::Vector{Rect2f} = Rect2f[])
 ```
 
-Inside the iteration loop, just after the existing `point_push` loop (after line 120 — the one that loops `for j in 1:n` applying anchor repulsion), add another loop applying obstacle repulsion. Use `overlap_push` from `box` vs each obstacle:
+**Edit 2.** Inside the per-label force accumulation loop (`for i in 1:n` inside the iteration loop), find the closing `end` of the inner `for j in 1:n` loop that applies `point_push` (the one with the `# Own anchor is included` comment). Just after that `end`, before the `off = offsets[i]` line, add an obstacles loop:
 
 ```julia
             for ob in obstacles
@@ -296,8 +275,6 @@ Inside the iteration loop, just after the existing `point_push` loop (after line
                 f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
 ```
-
-The exact insertion point: the existing per-label `f = ...` accumulation block ends at line 120 (or wherever `point_push` loop closes). Add the obstacle loop immediately after it, before line 121 (`off = offsets[i]`).
 
 - [ ] **Step 4: Run tests to verify pass**
 
@@ -325,7 +302,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 **Goal:** Allow callers to supply a starting offsets vector, skipping `init_offsets`. Used by the wrapper for warm-start and for the alignment pre-bias on fresh starts.
 
 **Files:**
-- Modify: `src/solver.jl:82` (signature) and `:88` (initialization)
+- Modify: `src/solver.jl` — `solve_repel` signature and the `offsets = [...]` initialization
 - Test: `test/test_solver.jl`
 
 - [ ] **Step 1: Write the failing test**
@@ -363,7 +340,7 @@ Expected: FAIL on `init_state` kwarg.
 
 - [ ] **Step 3: Modify `src/solver.jl`**
 
-Update the signature to include `init_state`:
+**Edit 1.** Update the `solve_repel` signature to add `init_state`:
 
 ```julia
 function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams;
@@ -371,13 +348,13 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                      init_state::Union{Nothing,Vector{Vec2f}} = nothing)
 ```
 
-Replace the existing offsets initialization at line 88:
+**Edit 2.** Find the line:
 
 ```julia
     offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]
 ```
 
-with:
+and replace with:
 
 ```julia
     if init_state !== nothing
@@ -415,7 +392,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 **Goal:** Per-label pinning. Labels marked in `pin_mask` are held at their `pinned_offsets` value throughout iteration; their boxes still act as obstacles for other labels. Returned offsets for pinned indices equal `pinned_offsets` exactly.
 
 **Files:**
-- Modify: `src/solver.jl:82` (signature) + force/update loops
+- Modify: `src/solver.jl` — `solve_repel` signature, offsets init, force-accumulation loop, and update loop
 - Test: `test/test_solver.jl`
 
 - [ ] **Step 1: Write the failing test**
@@ -463,7 +440,7 @@ Expected: FAIL on `pin_mask` kwarg not recognized.
 
 - [ ] **Step 3: Modify `src/solver.jl`**
 
-Update the signature:
+**Edit 1.** Update the `solve_repel` signature:
 
 ```julia
 function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams;
@@ -473,7 +450,7 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                      pinned_offsets::Vector{Vec2f}             = Vec2f[])
 ```
 
-Just after the `offsets` initialization (the if/else block from Task 4), force pinned slots to their pinned values, bypassing `_constrain`:
+**Edit 2.** Just after the offsets init block (the `if init_state !== nothing ... else ... end` from Task 4), force pinned slots to their pinned values:
 
 ```julia
     if pin_mask !== nothing
@@ -489,19 +466,41 @@ Just after the `offsets` initialization (the if/else block from Task 4), force p
     end
 ```
 
-In the per-iteration update loop (lines 128-140), wrap the writeback in a pin check. Change:
+**Edit 3.** Replace the per-label force-accumulation loop. Find the block beginning `for i in 1:n` inside the iteration loop (the one that builds `f` and writes `Δ[i] = f`) and replace it with the version that early-exits for pinned indices. The full replacement, including the obstacle loop from Task 3:
 
 ```julia
         for i in 1:n
-            d = _constrain(_clamp_step(Δ[i], smax), p.only_move)
-            newoff = offsets[i] .+ d
-            ...
-            offsets[i] = newoff
-            maxmove = max(maxmove, norm(move))
+            if pin_mask !== nothing && pin_mask[i]
+                Δ[i] = Vec2f(0, 0)
+                continue
+            end
+            f = Vec2f(0, 0)
+            for j in 1:n
+                i == j && continue
+                push = overlap_push(boxes[i], boxes[j])
+                f = f .+ Vec2f(push[1] * fx, push[2] * fy)
+            end
+            for j in 1:n
+                # Own anchor included: keeps isolated labels off their own point.
+                # force_pull (below) provides the inward balance.
+                pp = point_push(boxes[i], anchors[j], pad)
+                f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
+            end
+            for ob in obstacles
+                push = overlap_push(boxes[i], ob)
+                f = f .+ Vec2f(push[1] * fx, push[2] * fy)
+            end
+            off = offsets[i]
+            if norm(off) > pthr
+                f = f .- Vec2f(off[1] * plx, off[2] * ply)
+            end
+            Δ[i] = f
         end
 ```
 
-to:
+The pinned-`i` continue happens AFTER `boxes` is built — so pinned boxes still appear in `boxes` and contribute to the `overlap_push` and `point_push` terms for non-pinned labels.
+
+**Edit 4.** Replace the per-label update loop (the second `for i in 1:n` inside the iteration loop, which writes the new offsets and tracks `maxmove`):
 
 ```julia
         for i in 1:n
@@ -512,6 +511,8 @@ to:
             newoff = offsets[i] .+ d
             if p.bounds !== nothing
                 box = box_at(anchors[i], newoff, psizes[i])
+                # Constrain the clamp shift too, so confinement never moves
+                # a label along an axis the user locked via only_move.
                 newoff = newoff .+ _constrain(clamp_box_offset(box, p.bounds), p.only_move)
             end
             move = newoff .- offsets[i]
@@ -520,25 +521,7 @@ to:
         end
 ```
 
-In the force-computation loop (lines 106-126), pinned `i` does not need a force computed (since we won't apply it). Add an early-continue for pinned labels at the start of that loop, AFTER the `boxes` vector is built (so pinned boxes still appear in `boxes` and act as obstacles for non-pinned labels):
-
-```julia
-        boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
-        Δ = Vector{Vec2f}(undef, n)
-        for i in 1:n
-            if pin_mask !== nothing && pin_mask[i]
-                Δ[i] = Vec2f(0, 0)
-                continue
-            end
-            f = Vec2f(0, 0)
-            for j in 1:n
-                # ... existing body ...
-            end
-            ...
-        end
-```
-
-This ensures the `boxes[j]` entries for pinned `j` still contribute to the overlap_push and point_push terms for non-pinned `i`.
+**Return contract:** With these edits, `offsets[i]` for any pinned `i` is set once at Edit 2 to `pinned_offsets[i]` and never touched again. The returned `result.offsets[i]` therefore equals `pinned_offsets[i]` exactly — no constraint, no clamping. The wrapper relies on this when writing the final offsets vector with a single per-element loop.
 
 - [ ] **Step 4: Run tests to verify pass**
 
@@ -664,6 +647,16 @@ solves under `advance_optimization!`.
 system `annotation!` uses internally. Convert a data-space rectangle
 with `Makie.project`.
 
+# Caveats
+
+- Pinning a label so that its data anchor falls strictly inside the
+  rendered bbox suppresses that label's connector line. This is
+  `annotation!`'s `p2 in offset_bb && return` behavior, not a wrapper
+  bug.
+- `bounds`/`max_overlaps` misuse warnings fire once per session (Julia's
+  standard logger `maxlog=1` contract), so constructing multiple
+  algorithm instances with the same mistake yields one warning total.
+
 # Scope
 
 `max_overlaps` and background boxes are `textrepel!`-only — they have
@@ -715,18 +708,7 @@ solve_stats(alg::TextRepelAlgorithm) =
     (iter = alg.last_iter[], residual = alg.last_residual[])
 ```
 
-Do NOT wire it into the module yet — that's Task 8. For this task, we need to make the test importable, so add a temporary include at the top of `test/test_annotation_algorithm.jl`:
-
-Add at the top of `test/test_annotation_algorithm.jl`, before `using MakieTextRepel`:
-
-```julia
-# Temporary direct include until Task 8 wires this into the module.
-include(joinpath(@__DIR__, "..", "src", "annotation_algorithm.jl"))
-```
-
-Actually, this won't work cleanly because the file references `RepelParams` and `Rect2f` which need the module's imports. Instead, do the wiring step *as part of this task*: just add the include and export to `src/MakieTextRepel.jl` now. Skip the temporary include.
-
-Modify `src/MakieTextRepel.jl`:
+Wire the new file into the module now (the test needs access to `TextRepelAlgorithm` and `solve_stats` via `using MakieTextRepel`). Modify `src/MakieTextRepel.jl`:
 
 ```julia
 module MakieTextRepel
@@ -748,7 +730,7 @@ include("annotation_algorithm.jl")
 end # module MakieTextRepel
 ```
 
-And drop the temporary include from the test file. `TextRepelAlgorithm` and `solve_stats` are exported from inside `annotation_algorithm.jl` via the `export` line.
+`TextRepelAlgorithm` and `solve_stats` are exported from inside `annotation_algorithm.jl` via its `export` line.
 
 - [ ] **Step 4: Run tests to verify pass**
 
@@ -1008,42 +990,38 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 
 - [ ] **Step 1: Write the failing test**
 
+The test compares two solves of the same anchor with different bbox alignments. Without the alignment pre-bias, both solves treat the anchor as the bbox center (regardless of `text_bbs[i].origin`) and produce identical offsets. With the pre-bias, the offsets differ by approximately the alignment shift. This is a robust discriminator: without the fix, `delta` is essentially zero; with the fix, `delta` reflects the alignment shift.
+
 Add to `test/test_annotation_algorithm.jl`:
 
 ```julia
 @testset "dispatch — alignment-correct anchor (D5)" begin
-    # One label with left-aligned bbox: bbox origin is at the textposition,
-    # widths extend to the right. bbox_center = textposition + widths/2.
-    textpositions = [Point2f(50, 50)]
-    sizes_used    = (40f0, 10f0)
-    # Left-aligned: origin == textposition (bbox extends right from anchor).
-    text_bbs      = [Rect2f(50, 45, sizes_used...)]
-    bbox_center   = Point2f(50 + 20, 50)
-
-    offsets              = [Vec2f(0, 0)]
+    # Same textposition, same widths, two different alignments.
+    textpositions        = [Point2f(50, 50)]
     textpositions_offset = [Point2f(NaN, NaN)]
     viewport             = Rect2f(0, 0, 500, 500)
 
-    alg = TextRepelAlgorithm()
-    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
-                                  text_bbs, viewport;
-                                  maxiter = Makie.automatic,
-                                  labelspace = :relative_pixel,
-                                  reset = true)
+    # Center-aligned bbox: origin = textposition - widths/2.
+    text_bbs_center = [Rect2f(30, 45, 40, 10)]
+    offsets_center  = [Vec2f(0, 0)]
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets_center,
+        textpositions, textpositions_offset, text_bbs_center, viewport;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
 
-    # After solve, the bbox should NOT cover the textposition: PR #7's
-    # own-anchor repulsion guarantees this when the anchor is the
-    # textposition. If we had naively passed bbox_center as anchor, the
-    # bbox might cover textposition (which lies hw to the left of
-    # bbox_center).
-    rendered_bbox = Rect2f(text_bbs[1].origin[1] + offsets[1][1],
-                           text_bbs[1].origin[2] + offsets[1][2],
-                           text_bbs[1].widths[1],
-                           text_bbs[1].widths[2])
-    @test !(textpositions[1][1] >= rendered_bbox.origin[1] &&
-            textpositions[1][1] <= rendered_bbox.origin[1] + rendered_bbox.widths[1] &&
-            textpositions[1][2] >= rendered_bbox.origin[2] &&
-            textpositions[1][2] <= rendered_bbox.origin[2] + rendered_bbox.widths[2])
+    # Left-aligned bbox: origin = textposition (bbox extends right).
+    text_bbs_left = [Rect2f(50, 45, 40, 10)]
+    offsets_left  = [Vec2f(0, 0)]
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets_left,
+        textpositions, textpositions_offset, text_bbs_left, viewport;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # With the alignment fix, the left-aligned solve's offset is shifted
+    # right by approximately widths/2 = 20px relative to the centered one
+    # (the alignment pre-bias is added to init_state). Without the fix,
+    # both solves are anchored identically and the delta would be ~0.
+    delta = offsets_left[1] - offsets_center[1]
+    @test isapprox(delta[1], 20f0, atol = 5.0)
+    @test isapprox(delta[2], 0f0,  atol = 5.0)
 end
 ```
 
@@ -1146,6 +1124,25 @@ Add to `test/test_annotation_algorithm.jl`:
     # Auto-placed labels: not zero (solver ran).
     @test offsets[1] != Vec2f(0, 0)
     @test offsets[3] != Vec2f(0, 0)
+
+    # Pinned bbox acts as an obstacle for auto-placed labels:
+    # neither auto label's rendered bbox overlaps the pinned label's
+    # rendered bbox.
+    function _rendered(i)
+        Rect2f(text_bbs[i].origin[1] + offsets[i][1],
+               text_bbs[i].origin[2] + offsets[i][2],
+               text_bbs[i].widths[1],
+               text_bbs[i].widths[2])
+    end
+    pinned_rect = _rendered(2)
+    for i in (1, 3)
+        r = _rendered(i)
+        overlaps_x = !(r.origin[1] + r.widths[1] <= pinned_rect.origin[1] ||
+                       pinned_rect.origin[1] + pinned_rect.widths[1] <= r.origin[1])
+        overlaps_y = !(r.origin[2] + r.widths[2] <= pinned_rect.origin[2] ||
+                       pinned_rect.origin[2] + pinned_rect.widths[2] <= r.origin[2])
+        @test !(overlaps_x && overlaps_y)
+    end
 end
 
 @testset "dispatch — pin × only_move bypasses constraint (D6)" begin
@@ -1226,6 +1223,8 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 
 - [ ] **Step 1: Write the failing test**
 
+The discriminator: pre-populate the incoming `offsets` with values far from any sane starting state (~500px). Run two solves with the SAME parameters but different `reset` values. With warm-start honored, the `reset = false` call starts from the pre-populated extreme; without it, the call ignores `offsets` and starts from `init_offsets`/`align_bias` (small magnitudes). After the same iteration budget, the warm-started result stays much closer to (500, 500) than the fresh-started result. This is robust against the bounds-cooling step-cap schedule (which would zero out `step_max` near the final iteration regardless).
+
 Add to `test/test_annotation_algorithm.jl`:
 
 ```julia
@@ -1234,33 +1233,67 @@ Add to `test/test_annotation_algorithm.jl`:
     textpositions = [Point2f(0, 0), Point2f(100, 0), Point2f(200, 0)]
     textpositions_offset = fill(Point2f(NaN, NaN), n)
     text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 2000, 2000)   # large viewport; (500, 500) is far inside
+
+    # Modest max_iter so neither solve converges; step_max small so neither
+    # can fully traverse from (500, 500) to equilibrium.
+    alg = TextRepelAlgorithm(max_iter = 10, step_max = 5.0)
+
+    # Warm-start: pre-populated extreme offsets, reset = false.
+    offsets_warm = [Vec2f(500, 500) for _ in 1:n]
+    Makie.calculate_best_offsets!(alg, offsets_warm,
+        textpositions, textpositions_offset, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
+
+    # Fresh-start: same pre-populated input, but reset = true (solver
+    # discards offsets and uses init_offsets / align_bias instead).
+    offsets_fresh = [Vec2f(500, 500) for _ in 1:n]
+    Makie.calculate_best_offsets!(alg, offsets_fresh,
+        textpositions, textpositions_offset, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # Warm-start preserves position relative to fresh-start. Each
+    # warm-start offset is closer to (500, 500) than its fresh counterpart.
+    for i in 1:n
+        @test norm(offsets_warm[i] - Vec2f(500, 500)) <
+              norm(offsets_fresh[i] - Vec2f(500, 500))
+    end
+end
+
+@testset "dispatch — warm-start preserves own-anchor invariant (R3)" begin
+    # After equilibrium under reset=true (PR #7 guarantees the anchor lies
+    # outside each label's bbox), a subsequent reset=false solve should
+    # maintain that invariant — warm-start mustn't degenerate the layout.
+    n = 4
+    textpositions = [Point2f(50i, 50) for i in 1:n]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 15, p[2] - 5, 30, 10) for p in textpositions]
     bbox     = Rect2f(0, 0, 500, 500)
 
     alg = TextRepelAlgorithm(max_iter = 500)
     offsets = [Vec2f(0, 0) for _ in 1:n]
 
-    # First solve: fresh start.
+    # Solve to equilibrium.
     Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
-                                  text_bbs, bbox;
-                                  maxiter = Makie.automatic,
-                                  labelspace = :relative_pixel,
-                                  reset = true)
-    residual_fresh = solve_stats(alg).residual
-    offsets_eq = copy(offsets)
+        text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
 
-    # Second solve: warm-start from the equilibrium of the first.
+    # Continue from equilibrium with warm-start.
     Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
-                                  text_bbs, bbox;
-                                  maxiter = Makie.automatic,
-                                  labelspace = :relative_pixel,
-                                  reset = false)
-    residual_warm = solve_stats(alg).residual
+        text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
 
-    # Warm-started residual is at most equal to fresh-start residual.
-    @test residual_warm <= residual_fresh
-    # And the equilibrium configuration didn't drift much.
+    # Own-anchor invariant: each rendered bbox does NOT contain its anchor.
     for i in 1:n
-        @test norm(offsets[i] - offsets_eq[i]) < 1.0
+        rendered = Rect2f(text_bbs[i].origin[1] + offsets[i][1],
+                          text_bbs[i].origin[2] + offsets[i][2],
+                          text_bbs[i].widths[1],
+                          text_bbs[i].widths[2])
+        contains_x = textpositions[i][1] >= rendered.origin[1] &&
+                     textpositions[i][1] <= rendered.origin[1] + rendered.widths[1]
+        contains_y = textpositions[i][2] >= rendered.origin[2] &&
+                     textpositions[i][2] <= rendered.origin[2] + rendered.widths[2]
+        @test !(contains_x && contains_y)
     end
 end
 
@@ -1371,7 +1404,9 @@ Add to `test/test_annotation_algorithm.jl`:
     bbox     = Rect2f(0, 0, 200, 100)
 
     obstacle = Rect2f(40, 40, 20, 20)
-    alg = TextRepelAlgorithm(obstacles = [obstacle])
+    # max_iter set high so the solver has time to clear the obstacle even
+    # under the tight 200x100 viewport.
+    alg = TextRepelAlgorithm(obstacles = [obstacle], max_iter = 1000)
     offsets = [Vec2f(0, 0) for _ in 1:n]
 
     Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
@@ -1386,12 +1421,7 @@ Add to `test/test_annotation_algorithm.jl`:
                           text_bbs[i].origin[2] + offsets[i][2],
                           text_bbs[i].widths[1],
                           text_bbs[i].widths[2])
-        @test !(rendered.origin[1] + rendered.widths[1] <= obstacle.origin[1] ||
-                obstacle.origin[1] + obstacle.widths[1] <= rendered.origin[1] ||
-                rendered.origin[2] + rendered.widths[2] <= obstacle.origin[2] ||
-                obstacle.origin[2] + obstacle.widths[2] <= rendered.origin[2]) ||
-              true   # rendered does not overlap (the !(...) is "no overlap")
-        # Use explicit non-overlap assertion:
+        # No overlap iff one separating axis exists.
         no_overlap = (rendered.origin[1] + rendered.widths[1] <= obstacle.origin[1] ||
                       obstacle.origin[1] + obstacle.widths[1] <= rendered.origin[1] ||
                       rendered.origin[2] + rendered.widths[2] <= obstacle.origin[2] ||
@@ -1534,37 +1564,36 @@ end
 end
 ```
 
-- [ ] **Step 2: Run tests; expect zero-width and NaN to fail**
+- [ ] **Step 2: Run tests; some pass, NaN textposition fails**
 
 Run: `julia --project=. -e 'using Pkg; Pkg.test()'`
-Expected: zero-width test may pass (depends on solver division-by-zero behavior) but NaN-textposition test should FAIL (no validation in dispatch yet).
+Expected: n=1 and coincident testsets pass already (Phase B + C give us these for free); zero-width should pass given the unconditional guard below; NaN-textposition FAILS (no validation in dispatch yet).
+
+The mixed-expectation here is intentional — n=1 and coincident are lock-in regression coverage, not TDD-driven additions. NaN-textposition is the actual TDD case for this task.
 
 - [ ] **Step 3: Add NaN validation and zero-width guard to dispatch**
 
-In `src/annotation_algorithm.jl`, just after the length-check from Task 11:
+In `src/annotation_algorithm.jl`, find the length-check from Task 11 (`length(textpositions) == n || throw(DimensionMismatch(...))`) and add a finite-values check on the next line:
 
 ```julia
-    n == 0 && return
-    length(textpositions) == n || throw(DimensionMismatch(
-        "textpositions length $(length(textpositions)) does not match offsets length $n"))
     all(p -> all(isfinite, p), textpositions) || throw(ArgumentError(
         "TextRepelAlgorithm: textpositions contains non-finite values"))
 ```
 
-If the zero-width test fails (divide-by-zero in solver producing NaN offsets), add a sanity guard at the end of dispatch, just before the writeback loop:
+Replace the final writeback loop (the one that does `offsets[i] = T(result.offsets[i][1], result.offsets[i][2])`) with a guarded version that handles NaN/Inf from degenerate solver paths (zero-width labels):
 
 ```julia
     for i in 1:n
-        if !all(isfinite, result.offsets[i])
+        if all(isfinite, result.offsets[i])
+            offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
+        else
             # Solver produced NaN/Inf — fall back to zero offset for this label.
             offsets[i] = T(0, 0)
-        else
-            offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
         end
     end
 ```
 
-If the zero-width test passes without this guard, skip it (YAGNI).
+The guard is unconditional rather than conditional on the test failing — it's a one-line correctness improvement that costs nothing.
 
 - [ ] **Step 4: Run tests to verify pass**
 
@@ -1710,6 +1739,98 @@ Locks in maxiter precedence (explicit beats Automatic), labelspace
 invariance (solver always works in pixel space), the StaticArrays
 broadcast canary (Vec2f vector through the per-element writeback), and
 solve_stats populated after a real solve.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+"
+```
+
+---
+
+### Task 15a: Stress smoke (n=100 and pathological cluster) — CI-automated
+
+**Goal:** Automate the SC5 stress check so CI catches regressions where the wrapper produces NaN/Inf offsets or blows past the viewport on large/co-located inputs. This is the CI-runnable companion to the manual visual inspection in the completion checklist.
+
+**Files:**
+- Test: `test/test_annotation_algorithm.jl`
+
+- [ ] **Step 1: Write the test**
+
+Add to `test/test_annotation_algorithm.jl`:
+
+```julia
+@testset "stress smoke — n=100 random scatter" begin
+    using Random
+    rng = Random.MersenneTwister(0)
+    n = 100
+    textpositions = [Point2f(500 * rand(rng), 500 * rand(rng)) for _ in 1:n]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 15, p[2] - 5, 30, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    alg = TextRepelAlgorithm(max_iter = 500)
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # All offsets finite — no NaN/Inf leaked through the solver.
+    @test all(o -> all(isfinite, o), offsets)
+    # Solver made progress.
+    @test solve_stats(alg).iter > 0
+    # Rendered bboxes stay within a sanity envelope around the viewport
+    # (allow some slack — bounds clamping may not be exact at extremes).
+    for i in 1:n
+        rendered_center = textpositions[i] .+ offsets[i]
+        @test rendered_center[1] > -100 && rendered_center[1] < 600
+        @test rendered_center[2] > -100 && rendered_center[2] < 600
+    end
+end
+
+@testset "stress smoke — pathological co-located cluster (n=30)" begin
+    # All 30 anchors at the same position. Solver should fan them out via
+    # init_offsets's golden-angle spiral, not produce NaN/coincident bboxes.
+    n = 30
+    textpositions = fill(Point2f(250, 250), n)
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 25, p[2] - 5, 50, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    alg = TextRepelAlgorithm(max_iter = 500)
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # No NaN/Inf.
+    @test all(o -> all(isfinite, o), offsets)
+    # Labels spread out via init_offsets's golden-angle spiral. Each of
+    # the 30 indices produces a distinct direction, so under any
+    # non-collapsed solve the offsets remain distinct. Threshold > n/2
+    # catches partial-collapse regressions where a chunk of labels
+    # converge to the same point.
+    @test length(Set(offsets)) > n ÷ 2
+end
+```
+
+- [ ] **Step 2: Run tests to verify pass**
+
+Run: `julia --project=. -e 'using Pkg; Pkg.test()'`
+Expected: PASS (assumes the dispatch from Tasks 8-13 is correct; this is a regression-lock test, not a TDD-driven test).
+
+- [ ] **Step 3: Commit (test-only)**
+
+```bash
+git add test/test_annotation_algorithm.jl
+git commit -m "Test: stress smoke at n=100 and n=30 co-located cluster
+
+CI-automated companion to SC5's manual visual check. Asserts the
+dispatch produces finite offsets and a sensible spatial envelope on
+the two configurations that historically broke LabelRepel and the
+pre-PR-#7 spike.
 
 Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 "
@@ -1893,13 +2014,27 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
 
 ## Completion checklist
 
-After Task 17, verify:
+After Task 17, verify each item before declaring the branch ready:
 
 - [ ] `julia --project=. -e 'using Pkg; Pkg.test()'` exits clean, all tests pass
 - [ ] `git log --oneline` shows ~17 task commits since the spec commit (`7daf619`)
 - [ ] `examples/annotation_spike.jl` produces a 3-panel PNG with visible connectors in the middle panel (annotation! + TextRepelAlgorithm)
 - [ ] `examples/stress_compare.jl` produces three stress PNGs without errors
+- [ ] **SC5 — stress smoke**: open `test/output/stress_02_severe_n100.png` (n=100) and `test/output/stress_03_pathological_cluster_n30.png` (n=30 co-located); confirm the middle panel ("annotation! + TextRepelAlgorithm") shows a visually clean radial fan in the cluster case and dense-but-legible labels at n=100. No labels sitting on top of their own markers. Then run:
+
+  ```julia
+  julia --project=. -e '
+  using MakieTextRepel, Makie, GeometryBasics
+  # Re-run the stress n=100 scenario and assert all offsets are finite.
+  Random.seed!(0)
+  # (use the same setup as examples/stress_compare.jl)
+  '
+  ```
+
+  At minimum, assert `all(isfinite, vcat([collect(o) for o in offsets]...))` on each stress configuration.
+
 - [ ] No StaticArrays broadcast errors in any test run
 - [ ] `Pkg.test()` output contains no warnings except those from the deliberate-warning tests (Tasks 6, 12)
+- [ ] Spec risks revisited: R3 (warm-start own-anchor invariant) has a test in Task 11; R5 (maxlog=1) is documented in the docstring (Task 6); R6 (pinned anchor inside bbox suppresses connector) is documented in the docstring (Task 6); R7 (zero-width labels) has unconditional guard + test in Task 13; R8 (NaN textpositions) has ArgumentError in Task 13.
 
 When all checked, the branch is ready for the next stage (PR, merge, or further work).
