@@ -67,3 +67,20 @@ using MakieTextRepel: find_crossings
     c7 = Connector(Point2f(0, 1), Point2f(2, 1), true)
     @test find_crossings([c6, c7]) == Tuple{Int,Int}[]
 end
+
+using MakieTextRepel: swap_positions!
+
+@testset "swap_positions!" begin
+    anchors = [Point2f(0, 0), Point2f(10, 0)]
+    offsets = [Vec2f(5, 5), Vec2f(-5, 5)]
+    # absolute positions: (5, 5) and (5, 5)
+    # Yes those are coincident — pick more interesting ones:
+    offsets = [Vec2f(2, 3), Vec2f(-1, 4)]
+    # absolute positions: (2, 3) and (9, 4)
+    swap_positions!(offsets, anchors, 1, 2)
+    # After: label 1 at (9, 4), label 2 at (2, 3)
+    # offsets[1] = (9, 4) - (0, 0) = (9, 4)
+    # offsets[2] = (2, 3) - (10, 0) = (-8, 3)
+    @test offsets[1] ≈ Vec2f(9, 4)
+    @test offsets[2] ≈ Vec2f(-8, 3)
+end

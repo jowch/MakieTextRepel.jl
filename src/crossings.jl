@@ -36,3 +36,16 @@ function find_crossings(connectors::Vector{Connector})
     end
     return crossings
 end
+
+"""
+Exchange absolute positions of labels `i` and `j` while preserving their
+(label_text → anchor) identity. The new offsets are computed so each label's
+absolute position becomes the other's old absolute position.
+"""
+function swap_positions!(offsets::Vector{Vec2f}, anchors::Vector{Point2f}, i::Int, j::Int)
+    pos_i_old = anchors[i] .+ offsets[i]
+    pos_j_old = anchors[j] .+ offsets[j]
+    offsets[i] = Vec2f(pos_j_old .- anchors[i])
+    offsets[j] = Vec2f(pos_i_old .- anchors[j])
+    return offsets
+end
