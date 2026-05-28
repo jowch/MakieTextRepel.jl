@@ -63,12 +63,19 @@ function Makie.plot!(p::TextRepel)
         input_space = :data, output_space = :pixel,
         input_name = :positions, output_name = :px_anchors)
 
+    # Clamp region: the axis data-area viewport, SIZE ONLY. The viewport Rect2i carries
+    # a figure-relative origin, but :pixel anchors are scene-local (origin at the axis
+    # lower-left), so we use (0,0)–widths and discard the origin.
+    bounds_obs = lift(Makie.viewport(Makie.parent_scene(p))) do vp
+        Rect2f(0, 0, Float32.(widths(vp))...)
+    end
+
     # 2. Measure + solve. Recomputes when anchors/text/font/size or params change.
     solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
                   p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
-                  p.box_padding, p.point_padding, p.max_overlaps) do px, labels, fs, font,
-                                                                     fr, frp, fpl, mi, om,
-                                                                     bp, pp, mo
+                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs) do px, labels, fs, font,
+                                                                                 fr, frp, fpl, mi, om,
+                                                                                 bp, pp, mo, bnds
         anchors = [Point2f(q[1], q[2]) for q in px]
         sizes = measure_labels(labels, font, fs, 1.0)
         params = RepelParams(; force = Tuple(Float64.(fr)),
@@ -76,7 +83,7 @@ function Makie.plot!(p::TextRepel)
                                force_pull = Tuple(Float64.(fpl)),
                                max_iter = Int(mi), only_move = Symbol(om),
                                box_padding = Float64(bp), point_padding = Float64(pp),
-                               max_overlaps = Float64(mo))
+                               max_overlaps = Float64(mo), bounds = bnds)
         offsets, dropped = solve_repel(anchors, sizes, params)
         (; anchors, sizes, offsets, dropped)
     end
