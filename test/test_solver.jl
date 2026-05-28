@@ -341,3 +341,19 @@ end
     @test result.residual isa Float32
     @test result.residual >= 0
 end
+
+using MakieTextRepel: AbstractClusterSolver, ForceSolver, solve_cluster
+
+@testset "ForceSolver wraps solve_repel" begin
+    anchors = [Point2f(0, 0), Point2f(20, 0)]
+    sizes = [Vec2f(6, 4), Vec2f(6, 4)]
+    init = [Vec2f(5, 5), Vec2f(-5, 5)]
+    bounds = Rect2f(-50, -50, 100, 100)
+    params = RepelParams(bounds = bounds)
+    solver = ForceSolver(params)
+
+    o1, d1 = solve_cluster(solver, anchors, sizes, init, bounds)
+    r      = solve_repel(anchors, sizes, params; init_state = init)
+    @test o1 == r.offsets
+    @test d1 == r.dropped
+end
