@@ -4,6 +4,11 @@ A `ggrepel`/`adjustText`-style label-repel recipe for [Makie](https://docs.makie
 Automatically displaces overlapping text labels and draws connector lines back to
 their data points.
 
+![text! labels overlapping versus textrepel! labels resolved with connector lines](assets/example.png)
+
+*Left: plain `text!` labels collide. Right: `textrepel!` separates them and draws
+connectors back to each point. (Reproduce with [`examples/readme_example.jl`](examples/readme_example.jl).)*
+
 ## Installation
 
 MakieTextRepel depends on the (currently unregistered) TextMeasure.jl. Until both are
