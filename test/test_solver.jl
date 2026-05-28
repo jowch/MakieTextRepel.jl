@@ -125,3 +125,19 @@ end
                          RepelParams(box_padding = 0.0, bounds = bounds))
     @test all(isfinite, big[1])
 end
+
+@testset "solve_repel converges under edge-crowding" begin
+    # Wide labels crammed into a small box → they crowd against the walls. Without
+    # step-cap cooling this limit-cycles; with it, the solution settles. We detect
+    # convergence by stability: one extra iteration changes the result negligibly.
+    bounds = Rect2f(0, 0, 80, 48)   # small enough that labels crowd the walls
+    anchors = [Point2f(12, 12), Point2f(45, 12), Point2f(78, 12),
+               Point2f(28, 43), Point2f(62, 43)]
+    sizes = fill(Vec2f(46, 18), 5)
+    pa = RepelParams(box_padding = 2.0, bounds = bounds, max_iter = 3000)
+    pb = RepelParams(box_padding = 2.0, bounds = bounds, max_iter = 3001)
+    oa = solve_repel(anchors, sizes, pa)[1]
+    ob = solve_repel(anchors, sizes, pb)[1]
+    @test maximum(norm.(oa .- ob)) < 1.0   # converged, not limit-cycling
+    @test all(o -> all(isfinite, o), oa)
+end
