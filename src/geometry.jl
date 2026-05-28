@@ -72,7 +72,8 @@ end
 """
 Minimal shift to bring `box` fully inside `bounds`, preserving its size. Returns a
 zero vector if it already fits. If `box` is larger than `bounds` on an axis, pins it
-to that axis's lower edge.
+to that axis's lower edge — in Makie's y-up pixel space that is the left edge on x and
+the bottom edge on y.
 """
 function clamp_box_offset(box::Rect2f, bounds::Rect2f)
     lo, hi   = box.origin, box.origin .+ box.widths

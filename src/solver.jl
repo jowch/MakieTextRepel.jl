@@ -122,7 +122,9 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
             newoff = offsets[i] .+ d
             if p.bounds !== nothing
                 box = box_at(anchors[i], newoff, psizes[i])
-                newoff = newoff .+ clamp_box_offset(box, p.bounds)
+                # Constrain the clamp shift too, so confinement never moves a label
+                # along an axis the user locked via only_move.
+                newoff = newoff .+ _constrain(clamp_box_offset(box, p.bounds), p.only_move)
             end
             move = newoff .- offsets[i]
             offsets[i] = newoff

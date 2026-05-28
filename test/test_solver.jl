@@ -126,10 +126,29 @@ end
     @test all(isfinite, big[1])
 end
 
+@testset "solve_repel clamp respects only_move" begin
+    # Label anchored past the top of the bounds (y), under only_move = :x. The clamp
+    # must not introduce the forbidden y motion: its y-offset must match the unclamped
+    # run, while x is still confined inside the bounds.
+    anchors = [Point2f(195, 130)]
+    sizes = [Vec2f(40, 20)]
+    bounds = Rect2f(0, 0, 200, 100)
+    ox  = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = bounds))[1]
+    oxn = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = nothing))[1]
+    @test abs(ox[1][2] - oxn[1][2]) < 1e-3        # clamp left the forbidden y axis alone
+    bx = box_at(anchors[1], ox[1], sizes[1])
+    @test bx.origin[1] >= -1e-3                   # x still confined
+    @test bx.origin[1] + bx.widths[1] <= 200 + 1e-3
+end
+
 @testset "solve_repel converges under edge-crowding" begin
     # Wide labels crammed into a small box → they crowd against the walls. Without
-    # step-cap cooling this limit-cycles; with it, the solution settles. We detect
-    # convergence by stability: one extra iteration changes the result negligibly.
+    # step-cap cooling this settles into a period-2 limit cycle. We compare adjacent
+    # iteration counts (N vs N+1) precisely because that lands on opposite phases of a
+    # period-2 cycle: if it were still cycling the two would differ by the cycle
+    # amplitude (measured ≈10px uncooled), whereas a settled solution differs
+    # negligibly (≈0.1px). Adjacent counts catch parity cycling that a same-parity
+    # mid-run pair (e.g. 2000 vs 3000) would miss.
     bounds = Rect2f(0, 0, 80, 48)   # small enough that labels crowd the walls
     anchors = [Point2f(12, 12), Point2f(45, 12), Point2f(78, 12),
                Point2f(28, 43), Point2f(62, 43)]
