@@ -19,24 +19,27 @@ end
 const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
 
 """
-Deterministic initial offsets. Labels whose anchor coincides with an earlier
-anchor are fanned out along a golden-angle spiral so the force loop has a
-non-zero gradient to act on (replaces upstream random jitter).
+Deterministic initial offsets. Every label gets a per-index golden-angle
+direction sized to escape its own (already padded) box, so the force loop
+starts with each anchor on or outside its label box. Subsumes the old
+"only fan out coincident anchors" behavior. Determinism: pure function of
+index and passed-in sizes.
+
+`psizes` is the *padded* size (the caller adds `2·box_padding`); the
+corner-distance computed here is therefore the corner of the padded box,
+guaranteeing the anchor lies on or outside it for any spiral angle. The
+`1.0f0` floor only binds for degenerate zero-size labels with zero
+padding (e.g. empty strings); in normal layouts it never fires.
 """
-function explode_init(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
+function init_offsets(anchors::Vector{Point2f}, psizes::Vector{Vec2f}, p::RepelParams)
     n = length(anchors)
-    offsets = fill(Vec2f(0, 0), n)
-    # NOTE: nested loops (not `for i in 1:n, j in ...`) so `break` exits only the
-    # inner j-loop; a fused loop's `break` would skip all remaining i.
+    offsets = Vector{Vec2f}(undef, n)
     for i in 1:n
-        for j in 1:(i - 1)
-            if norm(anchors[i] .- anchors[j]) < 1f-3
-                θ = _GOLDEN_ANGLE * i
-                r = (sizes[i][1] + sizes[i][2]) / 4
-                offsets[i] = offsets[i] .+ Vec2f(r * cos(θ), r * sin(θ))
-                break
-            end
-        end
+        hw = psizes[i][1] / 2
+        hh = psizes[i][2] / 2
+        r  = max(sqrt(hw*hw + hh*hh), 1f0)
+        θ  = _GOLDEN_ANGLE * Float32(i)
+        offsets[i] = Vec2f(r * cos(θ), r * sin(θ))
     end
     return offsets
 end
@@ -80,7 +83,7 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
     @assert length(sizes) == n "anchors and sizes must have equal length"
 
     psizes = [s .+ 2 * Float32(p.box_padding) for s in sizes]
-    offsets = explode_init(anchors, psizes, p)
+    offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]
 
     fx, fy   = Float32.(p.force)
     ppx, ppy = Float32.(p.force_point)
@@ -106,7 +109,7 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                 f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             for j in 1:n
-                i == j && continue   # don't repel a label from its OWN anchor
+                # Own anchor is included: keeps isolated labels off their own point.
                 pp = point_push(boxes[i], anchors[j], pad)
                 f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
             end
