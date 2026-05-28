@@ -8,6 +8,7 @@ import TextMeasure
 export textrepel, textrepel!
 
 include("geometry.jl")
+include("voronoi.jl")
 include("solver.jl")
 include("connectors.jl")
 include("crossings.jl")
