@@ -24,3 +24,38 @@ function slot_offset(slot::Symbol, size::Vec2f, p::Real)
     slot === :TL && return Vec2f(-p32 - hw,  p32 + hh)
     error("unknown slot: $slot")
 end
+
+"""
+Initial offsets for each anchor: pick the highest-preference Imhof slot whose
+padded box fits inside the anchor's Voronoi cell; fall back to TR if none fit
+or the cell is `nothing`. Apply `_constrain(offset, params.only_move)` to
+respect axis-lock semantics from the first iteration.
+
+Pure function of (anchors, sizes, cells, params). Same inputs → same outputs.
+"""
+function initial_offsets(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
+                         cells::Vector{<:Union{GeometryBasics.Polygon, Nothing}},
+                         params)
+    n = length(anchors)
+    offsets = Vector{Vec2f}(undef, n)
+    pad = Float32(params.box_padding)
+    p = params.point_padding
+    for i in 1:n
+        cell = cells[i]
+        chosen = :TR
+        if cell !== nothing
+            for slot in IMHOF_ORDER
+                candidate = slot_offset(slot, sizes[i], p)
+                padded_size = sizes[i] .+ 2pad
+                box = box_at(anchors[i], candidate, padded_size)
+                if box_inside_polygon(box, cell)
+                    chosen = slot
+                    break
+                end
+            end
+        end
+        raw_off = slot_offset(chosen, sizes[i], p)
+        offsets[i] = _constrain(raw_off, params.only_move)
+    end
+    return offsets
+end

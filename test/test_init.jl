@@ -105,3 +105,40 @@ using MakieTextRepel: slot_offset, IMHOF_ORDER
     # Preference order
     @test IMHOF_ORDER == (:TR, :R, :T, :BR, :L, :BL, :B, :TL)
 end
+
+using MakieTextRepel: initial_offsets, RepelParams
+
+@testset "initial_offsets" begin
+    # Sparse: each anchor's cell easily fits a small label at TR. Expect every offset
+    # to equal the TR slot.
+    viewport = Rect2f(0, 0, 200, 200)
+    anchors = [Point2f(50, 50), Point2f(150, 50), Point2f(100, 150)]
+    sizes = [Vec2f(10, 6), Vec2f(10, 6), Vec2f(10, 6)]
+    params = RepelParams(point_padding = 2.0, box_padding = 0.0)
+    cells = voronoi_cells(anchors, viewport)
+
+    offsets = initial_offsets(anchors, sizes, cells, params)
+    @test length(offsets) == 3
+    expected_tr = slot_offset(:TR, sizes[1], params.point_padding)
+    @test offsets[1] ≈ expected_tr
+    @test offsets[2] ≈ expected_tr
+    @test offsets[3] ≈ expected_tr
+
+    # n = 1: cell is nothing → TR fallback.
+    cells1 = voronoi_cells([Point2f(50, 50)], viewport)
+    offs1 = initial_offsets([Point2f(50, 50)], [Vec2f(10, 6)], cells1, params)
+    @test offs1[1] ≈ expected_tr
+
+    # only_move = :x → y-component zeroed in initial offset
+    params_x = RepelParams(point_padding = 2.0, only_move = :x)
+    offs_x = initial_offsets(anchors, sizes, cells, params_x)
+    @test all(o -> o[2] == 0f0, offs_x)
+
+    # only_move = :y → x-component zeroed
+    params_y = RepelParams(point_padding = 2.0, only_move = :y)
+    offs_y = initial_offsets(anchors, sizes, cells, params_y)
+    @test all(o -> o[1] == 0f0, offs_y)
+
+    # Determinism
+    @test initial_offsets(anchors, sizes, cells, params) == initial_offsets(anchors, sizes, cells, params)
+end
