@@ -202,7 +202,7 @@ Append to `test/test_solver.jl`:
     # Wide labels crammed into a small box → they crowd against the walls. Without
     # step-cap cooling this limit-cycles; with it, the solution settles. We detect
     # convergence by stability: one extra iteration changes the result negligibly.
-    bounds = Rect2f(0, 0, 90, 55)
+    bounds = Rect2f(0, 0, 80, 48)   # small enough that labels crowd the walls
     anchors = [Point2f(12, 12), Point2f(45, 12), Point2f(78, 12),
                Point2f(28, 43), Point2f(62, 43)]
     sizes = fill(Vec2f(46, 18), 5)
@@ -218,7 +218,7 @@ end
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `julia --project=. -e 'using Pkg; Pkg.test()'`
-Expected: FAIL — without cooling the crowded case limit-cycles, so `oa` (even iter count) and `ob` (odd) differ by roughly the cycle amplitude (≫ 1.0). If it does NOT fail, the chosen scenario doesn't actually limit-cycle on this machine — STOP and report so the scenario can be retuned (do not weaken the assertion to force a pass).
+Expected: FAIL — without cooling the crowded case limit-cycles, so `oa` (even iter count) and `ob` (odd) differ by the cycle amplitude. (Validated: `maximum(norm.(oa .- ob)) ≈ 10.0` without cooling for this scenario, vs `≈ 0.098` with cooling.) If it does NOT fail, the chosen scenario doesn't actually limit-cycle on this machine — STOP and report so the scenario can be retuned (do not weaken the assertion to force a pass).
 
 - [ ] **Step 3: Add step-cap cooling**
 
