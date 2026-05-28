@@ -81,7 +81,7 @@ are in pixels; a label's box is centered at `anchor + offset`, padded by
 """
 function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
     n = length(anchors)
-    n == 0 && return (Vec2f[], falses(0))
+    n == 0 && return (; offsets = Vec2f[], dropped = falses(0), iter = 0, residual = 0f0)
     @assert length(sizes) == n "anchors and sizes must have equal length"
 
     psizes = [s .+ 2 * Float32(p.box_padding) for s in sizes]
@@ -93,6 +93,9 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
     pad      = Float32(p.point_padding)
     smax0    = Float32(p.step_max)
     pthr     = Float32(p.pull_threshold)
+
+    final_iter = 0
+    final_residual = 0f0
 
     for it in 1:p.max_iter
         # Step-cap cooling: linearly decay the per-iteration move cap so crowded,
@@ -138,8 +141,15 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
             offsets[i] = newoff
             maxmove = max(maxmove, norm(move))
         end
+        final_iter = it
+        final_residual = maxmove
         maxmove < p.tol && break
     end
 
-    return (offsets, compute_drops(anchors, offsets, psizes, p.max_overlaps))
+    return (;
+        offsets,
+        dropped = compute_drops(anchors, offsets, psizes, p.max_overlaps),
+        iter    = final_iter,
+        residual = final_residual,
+    )
 end

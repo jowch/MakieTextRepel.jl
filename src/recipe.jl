@@ -84,7 +84,8 @@ function Makie.plot!(p::TextRepel)
                                max_iter = Int(mi), only_move = Symbol(om),
                                box_padding = Float64(bp), point_padding = Float64(pp),
                                max_overlaps = Float64(mo), bounds = bnds)
-        offsets, dropped = solve_repel(anchors, sizes, params)
+        s = solve_repel(anchors, sizes, params)
+        offsets, dropped = s.offsets, s.dropped
         (; anchors, sizes, offsets, dropped)
     end
 

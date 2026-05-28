@@ -66,7 +66,10 @@ end
     p = RepelParams(box_padding = 0.0)
 
     # empty / single
-    @test solve_repel(Point2f[], Vec2f[], p) == (Vec2f[], falses(0))
+    empty_result = solve_repel(Point2f[], Vec2f[], p)
+    @test empty_result.offsets == Vec2f[]
+    @test empty_result.dropped == falses(0)
+    @test empty_result.iter == 0
     o1, d1 = solve_repel([Point2f(5, 5)], [Vec2f(10, 4)], p)
     # Single label: own-anchor repulsion now active. The spring pulls inward from
     # init but cannot reach 0; equilibrium sits inside the init radius.
@@ -212,4 +215,19 @@ end
     for i in 1:length(offs), j in (i+1):length(offs)
         @test offs[i] != offs[j]
     end
+end
+
+@testset "solve_repel returns NamedTuple with diagnostics" begin
+    anchors = [Point2f(0, 0), Point2f(50, 0)]
+    sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
+    p = RepelParams(max_iter = 50)
+    result = solve_repel(anchors, sizes, p)
+    @test result isa NamedTuple
+    @test propertynames(result) == (:offsets, :dropped, :iter, :residual)
+    @test result.offsets isa Vector{Vec2f}
+    @test result.dropped isa BitVector
+    @test result.iter isa Int
+    @test 1 <= result.iter <= 50
+    @test result.residual isa Float32
+    @test result.residual >= 0
 end
