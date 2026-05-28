@@ -95,6 +95,8 @@ function Makie.calculate_best_offsets!(
     n == 0 && return
     length(textpositions) == n || throw(DimensionMismatch(
         "textpositions length $(length(textpositions)) does not match offsets length $n"))
+    all(p -> all(isfinite, p), textpositions) || throw(ArgumentError(
+        "TextRepelAlgorithm: textpositions contains non-finite values"))
 
     T = eltype(offsets)
 
@@ -165,9 +167,18 @@ function Makie.calculate_best_offsets!(
             offsets[i] = T(pinned_offsets[i][1], pinned_offsets[i][2])
         elseif reset
             o = result.offsets[i] .+ align_bias[i]
-            offsets[i] = T(o[1], o[2])
+            if all(isfinite, o)
+                offsets[i] = T(o[1], o[2])
+            else
+                # Solver produced NaN/Inf — fall back to zero offset for this label.
+                offsets[i] = T(0, 0)
+            end
         else
-            offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
+            if all(isfinite, result.offsets[i])
+                offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
+            else
+                offsets[i] = T(0, 0)
+            end
         end
     end
     return

@@ -290,6 +290,75 @@ end
         maxiter = Makie.automatic, labelspace = :relative_pixel, reset = false)
 end
 
+@testset "dispatch — n=1" begin
+    textpositions = [Point2f(50, 50)]
+    textpositions_offset = [Point2f(NaN, NaN)]
+    text_bbs = [Rect2f(40, 45, 20, 10)]
+    bbox     = Rect2f(0, 0, 100, 100)
+    offsets  = [Vec2f(0, 0)]
+
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(),
+                                  offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    @test all(isfinite, offsets[1])
+end
+
+@testset "dispatch — coincident anchors" begin
+    n = 2
+    textpositions = [Point2f(50, 50), Point2f(50, 50)]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(40, 45, 20, 10) for _ in 1:n]
+    bbox     = Rect2f(0, 0, 200, 200)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    # Solver should not throw or produce NaN offsets for coincident anchors.
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(),
+                                  offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    @test all(isfinite, offsets[1])
+    @test all(isfinite, offsets[2])
+end
+
+@testset "dispatch — zero-width label" begin
+    textpositions = [Point2f(50, 50), Point2f(100, 50)]
+    textpositions_offset = fill(Point2f(NaN, NaN), 2)
+    text_bbs = [Rect2f(50, 50, 0, 0), Rect2f(90, 45, 20, 10)]
+    bbox     = Rect2f(0, 0, 200, 200)
+    offsets  = [Vec2f(0, 0) for _ in 1:2]
+
+    # Solver should not divide by zero or produce NaN offsets.
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(),
+                                  offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+    @test all(isfinite, offsets[1])
+    @test all(isfinite, offsets[2])
+end
+
+@testset "dispatch — NaN in textpositions errors clearly" begin
+    textpositions = [Point2f(NaN, 50), Point2f(100, 50)]
+    textpositions_offset = fill(Point2f(NaN, NaN), 2)
+    text_bbs = [Rect2f(p[1] - 10, p[2] - 5, 20, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 200, 200)
+    offsets  = [Vec2f(0, 0) for _ in 1:2]
+
+    @test_throws ArgumentError Makie.calculate_best_offsets!(
+        TextRepelAlgorithm(),
+        offsets, textpositions, textpositions_offset,
+        text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+end
+
 @testset "dispatch — obstacles avoidance" begin
     n = 1
     # Place a single label with initial bbox overlapping an obstacle.
