@@ -488,3 +488,60 @@ end
     @test s.iter > 0
     @test s.residual >= 0f0
 end
+
+@testset "stress smoke — n=100 random scatter" begin
+    using Random
+    rng = Random.MersenneTwister(0)
+    n = 100
+    textpositions = [Point2f(500 * rand(rng), 500 * rand(rng)) for _ in 1:n]
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 15, p[2] - 5, 30, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    alg = TextRepelAlgorithm(max_iter = 500)
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # All offsets finite — no NaN/Inf leaked through the solver.
+    @test all(o -> all(isfinite, o), offsets)
+    # Solver made progress.
+    @test solve_stats(alg).iter > 0
+    # Rendered bboxes stay within a sanity envelope around the viewport
+    # (allow some slack — bounds clamping may not be exact at extremes).
+    for i in 1:n
+        rendered_center = textpositions[i] .+ offsets[i]
+        @test rendered_center[1] > -100 && rendered_center[1] < 600
+        @test rendered_center[2] > -100 && rendered_center[2] < 600
+    end
+end
+
+@testset "stress smoke — pathological co-located cluster (n=30)" begin
+    # All 30 anchors at the same position. Solver should fan them out via
+    # init_offsets's golden-angle spiral, not produce NaN/coincident bboxes.
+    n = 30
+    textpositions = fill(Point2f(250, 250), n)
+    textpositions_offset = fill(Point2f(NaN, NaN), n)
+    text_bbs = [Rect2f(p[1] - 25, p[2] - 5, 50, 10) for p in textpositions]
+    bbox     = Rect2f(0, 0, 500, 500)
+    offsets  = [Vec2f(0, 0) for _ in 1:n]
+
+    alg = TextRepelAlgorithm(max_iter = 500)
+    Makie.calculate_best_offsets!(alg, offsets, textpositions, textpositions_offset,
+                                  text_bbs, bbox;
+                                  maxiter = Makie.automatic,
+                                  labelspace = :relative_pixel,
+                                  reset = true)
+
+    # No NaN/Inf.
+    @test all(o -> all(isfinite, o), offsets)
+    # Labels spread out via init_offsets's golden-angle spiral. Each of
+    # the 30 indices produces a distinct direction, so under any
+    # non-collapsed solve the offsets remain distinct. Threshold > n/2
+    # catches partial-collapse regressions where a chunk of labels
+    # converge to the same point.
+    @test length(Set(offsets)) > n ÷ 2
+end
