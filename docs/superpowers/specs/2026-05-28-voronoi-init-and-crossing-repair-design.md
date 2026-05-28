@@ -87,7 +87,7 @@ voronoi_cells(anchors::Vector{Point2f}, viewport::Rect2f; rng = MersenneTwister(
 **Implementation:**
 - **Finite-anchor filter (guard site).** Pre-pass: for each anchor, if any coordinate is non-finite (NaN/Inf), record `nothing` in that slot and exclude it from the triangulation input. This is the single guard for non-finite input in the v0.2 pipeline; no upstream caller is required to pre-filter.
 - For `n < 3` finite anchors: return `[nothing for _ in 1:n]`. All labels fall back to TR Imhof slot.
-- For `n ≥ 3` finite anchors: sort `(anchors, recorded_index)` lexicographically by `(x, y)`, dedup coincident anchors (those collisions get `nothing` in their output slots), pass the sorted unique anchors to `DelaunayTriangulation.triangulate` with the explicit `rng`, call `voronoi(tri; clip = true, clip_polygon = viewport_clip)` where `viewport_clip` is the CCW `(points, boundary_nodes)` Tuple form required by DT.jl's API (not a `Polygon` object), then un-sort the resulting cells to the original index order.
+- For `n ≥ 3` finite anchors: count `(x, y)` occurrences (anchors with `count > 1` are coincident and get `nothing` in their output slots), sort the distinct finite coordinates lexicographically, pass them to `DelaunayTriangulation.triangulate` with the explicit `rng`, call `voronoi(tri; clip = true, clip_polygon = viewport_clip)` where `viewport_clip` is the CCW `(points, boundary_nodes)` Tuple form required by DT.jl's API (not a `Polygon` object), then map the resulting cells back to the original anchor positions via a `(x, y) → cell` dictionary keyed on the same `Tuple{Float32, Float32}` coordinates used for de-duplication. (Implementation note: a `try`/`catch` around the DT.jl call falls back to all-`nothing` if DT fails on a degenerate input that slipped past `_all_collinear` — see "Input contract" below.)
 - Returns `Polygon` for each anchor that has a real cell; `nothing` for coincident, non-finite, or filtered-out anchors.
 
 **Helper for cell-fit testing:**
@@ -345,7 +345,7 @@ Per-stage mechanism:
 
 | Stage | Determinism source |
 |-------|---------------------|
-| Voronoi cells | Sorted unique anchor input + explicit `rng = MersenneTwister(0)` passed to `DelaunayTriangulation.triangulate` → stable cell output; un-sort by recorded index |
+| Voronoi cells | Lex-sorted distinct `Tuple{Float32, Float32}` coordinates + explicit `rng = MersenneTwister(0)` passed to `DelaunayTriangulation.triangulate` → stable cell output; cells mapped back to anchors via the same `coord → cell` dictionary used for de-duplication |
 | Imhof init | Fixed compile-time slot ordering, integer tiebreaks, no float-equality compares |
 | `solve_repel` | Existing — pure forces, no RNG, index-ordered pair iteration `for i in 1:n, j in i+1:n` |
 | `find_crossings` | Lex-ordered iteration, returns sorted `Vector{Tuple{Int,Int}}` |

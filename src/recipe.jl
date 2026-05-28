@@ -84,10 +84,11 @@ function Makie.plot!(p::TextRepel)
                                max_iter = Int(mi), only_move = Symbol(om),
                                box_padding = Float64(bp), point_padding = Float64(pp),
                                max_overlaps = Float64(mo), bounds = bnds)
-        clip = bnds === nothing ? Rect2f(-1f6, -1f6, 2f6, 2f6) : bnds
-        cells = voronoi_cells(anchors, clip)
+        # `bounds_obs` (lines 69-71) always yields a Rect2f, so `bnds` is never
+        # `nothing` on the recipe path — feed it straight through to the pipeline.
+        cells = voronoi_cells(anchors, bnds)
         init = initial_offsets(anchors, sizes, cells, params)
-        offsets, dropped = solve_cluster(ForceSolver(params), anchors, sizes, init, clip)
+        offsets, dropped = solve_cluster(ForceSolver(params), anchors, sizes, init, bnds)
         repair_crossings!(offsets, anchors, sizes, dropped, params; min_len = Float64(ml))
         (; anchors, sizes, offsets, dropped, params)
     end

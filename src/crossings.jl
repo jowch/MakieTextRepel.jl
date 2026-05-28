@@ -54,13 +54,17 @@ end
 Iterate: scan for crossings; for each non-conflicting crossing pair swap label
 positions; repeat. Terminates when no crossings remain or `max_iter` exceeded.
 `min_len` matches `min_segment_length` from the recipe so the scan agrees with
-what `build_connectors` would render.
+what `build_connectors` would render. No default — callers must pass the value
+the renderer will use, so the scan and the render agree byte-for-byte.
 
 Returns the number of outer iterations consumed (0 if no crossings on first scan).
+On cap-out, performs one final rescan and emits a `@warn` listing the residual
+crossings — this is the "best-effort with backstop" signal the spec describes.
+The non-crossing guarantee holds whenever this function returns < `max_iter`.
 """
 function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
                            sizes::Vector{Vec2f}, dropped::BitVector,
-                           params; min_len::Real = 2.0, max_iter::Int = 100)
+                           params; min_len::Real, max_iter::Int = 100)
     for iter in 1:max_iter
         connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
                       for i in eachindex(offsets)]
@@ -74,6 +78,14 @@ function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
             push!(swapped, i)
             push!(swapped, j)
         end
+    end
+    # Final rescan — distinguishes "capped out and converged on the last swap"
+    # from "capped out with crossings still present". Only warn for the latter.
+    final_connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
+                        for i in eachindex(offsets)]
+    residual = find_crossings(final_connectors)
+    if !isempty(residual)
+        @warn "repair_crossings! hit max_iter=$max_iter without convergence; $(length(residual)) crossing(s) remain"
     end
     return max_iter
 end

@@ -71,18 +71,26 @@ function voronoi_cells(anchors::Vector{Point2f}, viewport::Rect2f)
     end
 
     # 4. Triangulate distinct points; clip Voronoi cells to viewport.
+    # DT.jl can throw on degenerate inputs that slip past `_all_collinear` (e.g.,
+    # near-collinear at Float32 precision, four-points-on-a-circle, etc.). Catch
+    # any failure here and fall back to all-`nothing` so every label uses the TR
+    # Imhof slot rather than crashing the recipe's compute graph.
     rng = MersenneTwister(0)
     points = [(Float64(p[1]), Float64(p[2])) for p in distinct]
-    tri = DT.triangulate(points; rng = rng)
-    vor = DT.voronoi(tri; clip = true, clip_polygon = _viewport_clip(viewport))
-
-    # 5. Build coord → cell mapping.
-    # DT.jl returns CCW-wound rings, closed (first == last). Drop the closing duplicate.
     coord_to_cell = Dict{Tuple{Float32, Float32}, GeometryBasics.Polygon}()
-    for (idx, coord) in enumerate(distinct)
-        poly_pts = DT.get_polygon_coordinates(vor, idx)
-        ring = [Point2f(Float32(pt[1]), Float32(pt[2])) for pt in poly_pts[1:end-1]]
-        coord_to_cell[coord] = GeometryBasics.Polygon(ring)
+    try
+        tri = DT.triangulate(points; rng = rng)
+        vor = DT.voronoi(tri; clip = true, clip_polygon = _viewport_clip(viewport))
+
+        # 5. Build coord → cell mapping.
+        # DT.jl returns CCW-wound rings, closed (first == last). Drop the closing duplicate.
+        for (idx, coord) in enumerate(distinct)
+            poly_pts = DT.get_polygon_coordinates(vor, idx)
+            ring = [Point2f(Float32(pt[1]), Float32(pt[2])) for pt in poly_pts[1:end-1]]
+            coord_to_cell[coord] = GeometryBasics.Polygon(ring)
+        end
+    catch _e
+        return cells   # all nothing; degraded but safe
     end
 
     # 6. Assign cells to non-coincident finite anchors only.
@@ -99,7 +107,12 @@ end
 
 """Return `true` if every point in `pts` lies on a single line. Assumes `length(pts) ≥ 2`.
 Used to bail out before handing DT.jl a degenerate point set (which it would warn
-about and then throw on during Voronoi clipping)."""
+about and then throw on during Voronoi clipping). The DT.jl wrapper in
+`voronoi_cells` catches any near-collinear case that slips past this guard, so a
+generous epsilon here is safe — we err on the side of fast TR fallback over
+crashing the compute graph."""
+const _COLLINEAR_EPS = 1f-3   # px²; loose enough to absorb Float32 rounding at typical pixel scales
+
 function _all_collinear(pts::Vector{Tuple{Float32, Float32}})
     n = length(pts)
     n < 3 && return true
@@ -109,9 +122,9 @@ function _all_collinear(pts::Vector{Tuple{Float32, Float32}})
     dy = p2[2] - p1[2]
     for k in 3:n
         pk = pts[k]
-        # Cross of (p2-p1) and (pk-p1): zero iff pk lies on line through p1,p2.
+        # Cross of (p2-p1) and (pk-p1): ≈zero iff pk lies on line through p1,p2.
         cr = dx * (pk[2] - p1[2]) - dy * (pk[1] - p1[1])
-        cr == 0 || return false
+        abs(cr) <= _COLLINEAR_EPS || return false
     end
     return true
 end

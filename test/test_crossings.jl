@@ -121,4 +121,22 @@ using MakieTextRepel: repair_crossings!
     offsets3 = [Vec2f(12, 4), Vec2f(-12, 4)]
     iters3 = repair_crossings!(offsets3, anchors, sizes, dropped, params; max_iter = 3, min_len = 0.5)
     @test iters3 ≤ 3
+
+    # Cap-out signal: drive a crossing input with `max_iter = 0` so the loop
+    # body never runs, the final rescan finds the un-repaired crossing, and the
+    # function emits the @warn that the recipe (and any other caller) needs to
+    # see in order to know the no-crossing property failed for this layout.
+    offsets4 = [Vec2f(12, 4), Vec2f(-12, 4)]
+    @test_logs (:warn, r"max_iter=0") (@test repair_crossings!(offsets4, anchors, sizes, dropped, params;
+                                                               max_iter = 0, min_len = 0.5) == 0)
+    # Residual crossing must still be present in the offsets we returned.
+    conn4 = [connector_for(anchors[i], offsets4[i], sizes[i], dropped[i], params, 0.5)
+             for i in eachindex(anchors)]
+    @test !isempty(find_crossings(conn4))
+
+    # Conversely, a no-crossings input with `max_iter = 0` must NOT warn and
+    # must return 0 (the loop's "converged at iter-1=0" path).
+    offsets5 = [Vec2f(5, 5), Vec2f(5, 5)]   # parallel leaders, no crossing
+    @test_logs repair_crossings!(offsets5, anchors, sizes, dropped, params;
+                                 max_iter = 0, min_len = 0.5)
 end

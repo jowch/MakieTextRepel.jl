@@ -4,6 +4,12 @@
 Resolved connector geometry for one label. `drawn = false` mirrors the v0.1
 suppression rules in `build_connectors`: dropped label, anchor inside padded
 box, trim direction inversion, or visible length below `min_segment_length`.
+
+Field order is `(label_end, anchor_end, drawn)` — note that this is the
+*reverse* of the visual anchor → label direction. Use `connector_for` to
+construct these from anchor / offset / size data rather than calling the
+positional constructor directly; tests that build `Connector` values inline
+must mind the order (see `test_crossings.jl`).
 """
 struct Connector
     label_end::Point2f
