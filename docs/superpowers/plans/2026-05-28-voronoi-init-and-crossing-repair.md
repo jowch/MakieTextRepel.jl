@@ -27,13 +27,18 @@
 **Modified:**
 - `Project.toml` — add `DelaunayTriangulation` dep + compat; bump version to `0.2.0`
 - `src/MakieTextRepel.jl` — add new includes
-- `src/solver.jl` — `solve_repel` takes required `initial_offsets::Vector{Vec2f}`; `init_offsets` and `_GOLDEN_ANGLE` deleted
 - `src/connectors.jl` — extract per-label connector geometry into `connector_for`; `build_connectors` calls through it
-- `src/recipe.jl` — `lift` node calls Voronoi → init → solver → repair pipeline
+- `src/recipe.jl` — `lift` node calls Voronoi → init → solver → repair pipeline; pass `initial_offsets` via the existing `init_state` kwarg
 - `test/runtests.jl` — include new test files
-- `test/test_solver.jl` — pass explicit initial offsets; rebaseline determinism expected values
 - `test/test_connectors.jl` — light edits for `connector_for` factoring
 - `test/test_integration.jl` — add pipeline invariant test
+- `CHANGELOG.md` — close out the "Unreleased" 0.1.0 section and add a new `## [0.2.0]` section above it
+
+**Untouched by this plan:**
+- `src/solver.jl` — `solve_repel` already accepts the `init_state` kwarg (from spike PR #10). `init_offsets` and `_GOLDEN_ANGLE` are RETAINED because `src/annotation_algorithm.jl` calls `init_offsets` for the `reset=true` warm-start at `src/annotation_algorithm.jl:176`. The new `src/init.jl` defines `initial_offsets` (with trailing `s`) so the names don't collide.
+- `src/annotation_algorithm.jl` — not modified by this plan.
+- `test/test_solver.jl` — not modified by this plan. Its existing `solve_repel` calls remain valid (they exercise the default `init_state === nothing` path and the kwarg signature is backwards-compatible).
+- `test/test_annotation_algorithm.jl` — not modified.
 
 ---
 
@@ -57,13 +62,13 @@ The spec uses `Point2f` for offsets in a few places — that's a typo; v0.1 code
 
 - [ ] **Step 1: Add the dependency declaration**
 
-Edit `Project.toml` `[deps]` block (after line 7) to add:
+In `Project.toml`'s `[deps]` block (which currently lists `GeometryBasics`, `LinearAlgebra`, `Makie`, `TextMeasure` in that order), insert a `DelaunayTriangulation` line so the block stays alphabetized — between `GeometryBasics` and `LinearAlgebra`:
 
 ```toml
 DelaunayTriangulation = "927a84f5-c5f4-47a5-9785-b46e178433df"
 ```
 
-Then in the `[compat]` block (after line 19) add:
+In the `[compat]` block (which currently lists `GeometryBasics`, `Makie`, `julia`), add — likewise alphabetized:
 
 ```toml
 DelaunayTriangulation = "1.6"
@@ -1087,87 +1092,64 @@ git commit -m "Add repair_crossings!: scan + non-conflicting batched swaps with 
 
 ---
 
-### Task 11: Add `initial_offsets` argument to `solve_repel` (no behavior change)
+### Task 11: Pin the spike-landed `init_state` kwarg + `RepelParams` copy constructor
 
 **Files:**
-- Modify: `src/solver.jl`
 - Modify: `test/test_solver.jl`
-- Modify: `src/recipe.jl`
 
-**Intent:** Change the signature only; keep `init_offsets` and `_GOLDEN_ANGLE` for now and have callers pass `init_offsets(anchors, psizes, params)` explicitly. Output is byte-identical to v0.1. The deletion of `init_offsets`/`_GOLDEN_ANGLE` happens in Task 13 once the new pipeline replaces them at the call sites.
+**Intent:** Spike PR #10 already landed (a) `solve_repel(...; init_state, obstacles, pin_mask, pinned_offsets)` returning a `(; offsets, dropped, iter, residual)` NamedTuple (see `src/solver.jl:94-198`), and (b) `RepelParams(base::RepelParams; kwargs...)` copy constructor (see `src/solver.jl:25-29`). Tasks 12 and 13 depend on both. Lock the contract with a focused test so any future refactor that drops these stays caught at the unit level.
 
-- [ ] **Step 1: Update `src/solver.jl`**
+`src/solver.jl` is **not modified by this task**. `init_offsets` and `_GOLDEN_ANGLE` are retained throughout — `src/annotation_algorithm.jl:176` calls `init_offsets` for the `reset=true` warm-start path.
 
-Replace the `solve_repel` signature (line 82) with:
+- [ ] **Step 1: Add the pinning testset**
 
-```julia
-function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
-                     initial_offsets::Vector{Vec2f}, p::RepelParams)
-```
-
-And replace line 88:
+Append to `test/test_solver.jl`:
 
 ```julia
-    offsets = [_constrain(o, p.only_move) for o in initial_offsets]
+@testset "v0.2 prereqs: init_state kwarg and RepelParams copy constructor" begin
+    # `init_state` kwarg path — fresh start overridden, output deterministic.
+    anchors = [Point2f(0, 0), Point2f(40, 0)]
+    sizes   = [Vec2f(10, 4), Vec2f(10, 4)]
+    init    = [Vec2f(10, 0), Vec2f(-10, 0)]
+    p = RepelParams(box_padding = 0.0, max_iter = 200)
+
+    r = solve_repel(anchors, sizes, p; init_state = init)
+    @test r isa NamedTuple
+    @test Set(propertynames(r)) == Set([:offsets, :dropped, :iter, :residual])
+    @test length(r.offsets) == 2
+    @test all(isfinite, r.offsets)
+
+    # Wrong-length init_state must throw.
+    @test_throws DimensionMismatch solve_repel(anchors, sizes, p;
+                                               init_state = [Vec2f(0, 0)])
+
+    # Copy constructor — only listed field changes; others carried over verbatim.
+    base = RepelParams(force = (3.0, 3.0), max_iter = 123, box_padding = 7.5)
+    bumped = RepelParams(base; max_iter = 999)
+    @test bumped.max_iter == 999
+    @test bumped.force == (3.0, 3.0)
+    @test bumped.box_padding == 7.5
+
+    # Bounds override leaves everything else intact.
+    withb = RepelParams(base; bounds = Rect2f(0, 0, 100, 100))
+    @test withb.bounds == Rect2f(0, 0, 100, 100)
+    @test withb.max_iter == 123
+end
 ```
 
-(was: `offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]`)
-
-The rest of the function is unchanged. Do **not** delete `_GOLDEN_ANGLE` or `init_offsets` in this task.
-
-- [ ] **Step 2: Find all `solve_repel` call sites**
-
-```bash
-grep -rn 'solve_repel(' src/ test/
-```
-
-Expected hits: `src/recipe.jl:87`, `test/test_solver.jl` (~15 lines). Each call needs an explicit `initial_offsets` argument.
-
-- [ ] **Step 3: Update `src/recipe.jl` line 87**
-
-Before:
-```julia
-        offsets, dropped = solve_repel(anchors, sizes, params)
-```
-
-After:
-```julia
-        psizes = [s .+ 2 * Float32(params.box_padding) for s in sizes]
-        init = init_offsets(anchors, psizes, params)
-        offsets, dropped = solve_repel(anchors, sizes, init, params)
-```
-
-- [ ] **Step 4: Update every `solve_repel` call site in `test/test_solver.jl`**
-
-For each call, compute `psizes = [s .+ 2*Float32(params.box_padding) for s in sizes]` then pass `init_offsets(anchors, psizes, params)`. For example:
-
-Before:
-```julia
-offsets, dropped = solve_repel(anchors, sizes, params)
-```
-
-After:
-```julia
-psizes = [s .+ 2*Float32(params.box_padding) for s in sizes]
-init = init_offsets(anchors, psizes, params)
-offsets, dropped = solve_repel(anchors, sizes, init, params)
-```
-
-Since `init_offsets` is unchanged in this task and still produces the same golden-angle offsets, every existing test assertion remains valid — no rebaselining needed.
-
-- [ ] **Step 5: Run, expect pass**
+- [ ] **Step 2: Run, expect pass**
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-Expected: all tests pass unchanged. No numerical assertions broke.
+Expected: all tests pass. The new testset validates that the spike's API surface is what Tasks 12 and 13 need.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add src/solver.jl src/recipe.jl test/test_solver.jl
-git commit -m "Add required initial_offsets argument to solve_repel (no behavior change)"
+git add test/test_solver.jl
+git commit -m "Pin v0.2 prereqs: solve_repel init_state kwarg + RepelParams copy ctor"
 ```
 
 ---
@@ -1196,9 +1178,9 @@ using MakieTextRepel: AbstractClusterSolver, ForceSolver, solve_cluster
     solver = ForceSolver(params)
 
     o1, d1 = solve_cluster(solver, anchors, sizes, init, bounds)
-    o2, d2 = solve_repel(anchors, sizes, init, params)
-    @test o1 == o2
-    @test d1 == d2
+    r      = solve_repel(anchors, sizes, params; init_state = init)
+    @test o1 == r.offsets
+    @test d1 == r.dropped
 end
 ```
 
@@ -1225,7 +1207,7 @@ function solve_cluster end
 - [ ] **Step 4: Create `src/solvers/force.jl`**
 
 ```julia
-# solvers/force.jl — Force-directed cluster solver wrapping the v0.1 solve_repel.
+# solvers/force.jl — Force-directed cluster solver wrapping solve_repel.
 
 """ForceSolver carries `RepelParams` and dispatches to `solve_repel`."""
 struct ForceSolver <: AbstractClusterSolver
@@ -1234,34 +1216,41 @@ end
 
 function solve_cluster(s::ForceSolver, anchors::Vector{Point2f}, sizes::Vector{Vec2f},
                        initial_offsets::Vector{Vec2f}, bounds::Rect2f)
-    # Apply bounds via a params shallow-copy so callers don't need to mutate.
-    p = RepelParams(
-        force = s.params.force, force_point = s.params.force_point, force_pull = s.params.force_pull,
-        max_iter = s.params.max_iter, only_move = s.params.only_move,
-        box_padding = s.params.box_padding, point_padding = s.params.point_padding,
-        max_overlaps = s.params.max_overlaps, step_max = s.params.step_max,
-        pull_threshold = s.params.pull_threshold, tol = s.params.tol,
-        bounds = bounds,
-    )
-    return solve_repel(anchors, sizes, initial_offsets, p)
+    # `RepelParams(base; ...)` (src/solver.jl:25-29) copies `s.params` and overrides
+    # only `bounds`, so callers don't need to mutate anything.
+    p = RepelParams(s.params; bounds = bounds)
+    r = solve_repel(anchors, sizes, p; init_state = initial_offsets)
+    return (r.offsets, r.dropped)
 end
 ```
 
 - [ ] **Step 5: Update module includes**
 
-Edit `src/MakieTextRepel.jl`:
+Edit `src/MakieTextRepel.jl` (current state, post-spike):
 
 ```julia
 include("geometry.jl")
-include("voronoi.jl")
-include("init.jl")
+include("solver.jl")
+include("connectors.jl")
+include("measure.jl")
+include("recipe.jl")
+include("annotation_algorithm.jl")
+```
+
+Insert the v0.2 includes so `voronoi.jl`/`init.jl` come after `solver.jl` (they don't depend on it but stay grouped), and `crossings.jl` comes after `connectors.jl` (it depends on `connector_for` from Task 7). The `solvers/` files go after `solver.jl`. `annotation_algorithm.jl` stays last because it depends on `solver.jl` and `recipe.jl` is unchanged. Final order:
+
+```julia
+include("geometry.jl")
 include("solver.jl")
 include("solvers/abstract.jl")
 include("solvers/force.jl")
+include("voronoi.jl")
+include("init.jl")
 include("connectors.jl")
 include("crossings.jl")
 include("measure.jl")
 include("recipe.jl")
+include("annotation_algorithm.jl")
 ```
 
 - [ ] **Step 6: Run, expect pass**
@@ -1286,7 +1275,7 @@ git commit -m "Add AbstractClusterSolver + ForceSolver wrapping solve_repel"
 
 - [ ] **Step 1: Modify the `lift` node in `Makie.plot!`**
 
-Replace the body of the `solved = lift(...) do ... end` at lines 74–89 of `src/recipe.jl` with:
+Replace the body of the `solved = lift(...) do ... end` at lines 74–90 of `src/recipe.jl` with:
 
 ```julia
     solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
@@ -1302,14 +1291,19 @@ Replace the body of the `solved = lift(...) do ... end` at lines 74–89 of `src
                                max_iter = Int(mi), only_move = Symbol(om),
                                box_padding = Float64(bp), point_padding = Float64(pp),
                                max_overlaps = Float64(mo), bounds = bnds)
-        cells = voronoi_cells(anchors, bnds === nothing ? Rect2f(-1f6, -1f6, 2f6, 2f6) : bnds)
+        clip = bnds === nothing ? Rect2f(-1f6, -1f6, 2f6, 2f6) : bnds
+        cells = voronoi_cells(anchors, clip)
         init = initial_offsets(anchors, sizes, cells, params)
-        offsets, dropped = solve_cluster(ForceSolver(params), anchors, sizes, init,
-                                          bnds === nothing ? Rect2f(-1f6, -1f6, 2f6, 2f6) : bnds)
+        offsets, dropped = solve_cluster(ForceSolver(params), anchors, sizes, init, clip)
         repair_crossings!(offsets, anchors, sizes, dropped, params; min_len = Float64(ml))
         (; anchors, sizes, offsets, dropped, params)
     end
 ```
+
+Notes:
+- `solve_cluster` (Task 12) internally calls `solve_repel(...; init_state = init)` and destructures the NamedTuple to return the `(offsets, dropped)` tuple shape that the lift body consumes.
+- `clip` is the fallback for when `bnds === nothing`, which is defensive — the recipe path always sets bounds via `bounds_obs` (`src/recipe.jl:69-71`).
+- `min_segment_length` joins the lift's input list because `repair_crossings!` uses it to decide which connectors are visible (and therefore eligible to cross).
 
 - [ ] **Step 2: Expose lifted state on the plot attributes**
 
@@ -1327,60 +1321,19 @@ Two notes:
 - `bounds_obs` from line 69–71 is always a `Rect2f` (clamped to viewport size), so the `bnds === nothing` fallback is defensive — `bnds` should never be `nothing` for the recipe path.
 - `min_segment_length` is now a `lift` input because `repair_crossings!` uses it.
 
-- [ ] **Step 3: Run, expect pass**
+- [ ] **Step 3: Rebaseline `test/test_integration.jl`**
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-Existing integration tests (test_integration.jl) need rebaselining at this point. If any assert specific offset values, comment them out, get the new values, write them back.
+Existing integration tests in `test/test_integration.jl` may assert specific offset values that change because (a) Imhof initialization replaces the golden-angle initial positions for the recipe path, and (b) `repair_crossings!` can swap labels post-solve. For any failing numerical comparison, grep the failure output for the actual computed value and update the test. Tests asserting behavioral properties (`@test all(isfinite, ...)`, `@test boxes don't overlap`, etc.) should still pass — if not, that's a regression to investigate, not rebaseline.
 
-- [ ] **Step 4: Delete the now-unused `init_offsets` and `_GOLDEN_ANGLE`**
+`test/test_solver.jl` and `test/test_annotation_algorithm.jl` should **not** need rebaselining: they call `solve_repel` directly with the default `init_state === nothing` branch, which still routes through the retained `init_offsets`/`_GOLDEN_ANGLE` path.
 
-The new pipeline (`initial_offsets` from `src/init.jl`) replaces these at the only remaining call site (`recipe.jl` from Step 1 above). Delete them.
+**Do not delete `init_offsets` or `_GOLDEN_ANGLE`.** `src/annotation_algorithm.jl:176` calls `init_offsets(anchors, psizes, alg.params)` for its `reset=true` warm-start, and the default-init branch of `solve_repel` (`src/solver.jl:109`) calls it when `init_state === nothing`. Removing them would break the spike-PR API surface.
 
-In `src/solver.jl`, delete lines 19 and 21–47 (the `_GOLDEN_ANGLE` constant declaration and the `init_offsets` function and its docstring).
-
-In `test/test_solver.jl`:
-- Update line 1's `using` to drop `init_offsets`: `using MakieTextRepel: RepelParams, box_at`
-- Delete the entire `@testset "init_offsets" begin ... end` block (lines 5 through ~40 — the testset that calls `init_offsets` directly).
-
-Also in `test/test_solver.jl`, every `solve_repel` call that was updated in Task 11 to use `init_offsets(anchors, psizes, params)` for its explicit `init` argument now needs a different source for `init`. Replace each `init_offsets(...)` call with `zeros(Vec2f, length(anchors))` — the solver behavior is independent of initial position for these unit tests (they're testing the force loop, not the initialization).
-
-**Specifically:** wherever Task 11 inserted
-
-```julia
-psizes = [s .+ 2*Float32(params.box_padding) for s in sizes]
-init = init_offsets(anchors, psizes, params)
-offsets, dropped = solve_repel(anchors, sizes, init, params)
-```
-
-simplify to
-
-```julia
-init = zeros(Vec2f, length(anchors))
-offsets, dropped = solve_repel(anchors, sizes, init, params)
-```
-
-This changes the numerical output of `solve_repel` in those tests because the initial offsets differ. **Rebaseline the affected expected values:**
-
-1. Run the suite after the changes.
-2. For each test that fails on a numerical comparison (e.g., `@test offsets[1] ≈ Vec2f(...)`), grep the failure output for the actual computed value and update the test.
-3. For tests asserting behavioral properties (`@test all(isfinite, ...)`, `@test boxes don't overlap`, etc.), no change should be needed.
-
-Inspect `test/test_solver.jl` for these likely-affected assertion patterns:
-- Any line containing `≈ Vec2f(`
-- Any line asserting specific `offsets[i]` or `dropped[i]` values
-
-- [ ] **Step 5: Run, expect pass**
-
-```bash
-julia --project=. -e 'using Pkg; Pkg.test()'
-```
-
-Existing integration tests (`test/test_integration.jl`) may also need rebaselining at this point if they assert specific offset values. Apply the same methodology.
-
-- [ ] **Step 6: Smoke-test the example**
+- [ ] **Step 4: Smoke-test the example**
 
 ```bash
 julia --project=. examples/readme_example.jl
@@ -1388,11 +1341,11 @@ julia --project=. examples/readme_example.jl
 
 The example should run without errors and produce a PNG that visually does not have crossing leader lines. Manual eyeball check.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add src/recipe.jl src/solver.jl test/test_solver.jl test/test_integration.jl
-git commit -m "Wire Voronoi init + repair_crossings! pipeline; remove golden-angle init"
+git add src/recipe.jl test/test_integration.jl
+git commit -m "Wire Voronoi init + repair_crossings! pipeline in recipe"
 ```
 
 ---
@@ -1521,11 +1474,11 @@ git commit -m "Add v0.2 pipeline invariant tests: no crossings on sparse, dense,
 
 ---
 
-### Task 15: Project.toml version bump + CHANGELOG
+### Task 15: Project.toml version bump + CHANGELOG entry
 
 **Files:**
 - Modify: `Project.toml`
-- Create: `CHANGELOG.md`
+- Modify: `CHANGELOG.md` (already exists, created by spike PR #10 in Keep a Changelog format)
 
 - [ ] **Step 1: Bump version**
 
@@ -1535,12 +1488,12 @@ Edit `Project.toml` line 4:
 version = "0.2.0"
 ```
 
-- [ ] **Step 2: Create CHANGELOG.md**
+- [ ] **Step 2: Update CHANGELOG.md**
+
+The file opens with an `## [Unreleased]` heading whose body documents the 0.1.0 feature set (it predates the v0.2 work). Rename that heading to `## [0.1.0] - YYYY-MM-DD` (use today's date; this closes out the 0.1.0 section), then add a new `## [0.2.0] - YYYY-MM-DD` section directly above it:
 
 ```markdown
-# Changelog
-
-## v0.2.0
+## [0.2.0] - YYYY-MM-DD
 
 Layouts are now initialized using Imhof-preferred slots within each anchor's Voronoi cell when geometry allows, and a post-solve repair pass guarantees no crossing leader lines. Existing user code runs unchanged; output positions will differ from v0.1.
 
@@ -1553,23 +1506,19 @@ Layouts are now initialized using Imhof-preferred slots within each anchor's Vor
 
 ### Changed
 
-- `solve_repel` now takes a required `initial_offsets::Vector{Vec2f}` argument (was internally computed via golden-angle initialization).
-- Output offset values differ from v0.1 even for identical inputs, because both the initial positions and the post-solve crossing repair affect the final layout.
+- `textrepel!` recipe pipeline now Voronoi-initializes label positions and runs a post-solve crossing-repair pass. Output offsets differ from v0.1 even for identical inputs.
 
-### Removed
+### Notes
 
-- `init_offsets` and `_GOLDEN_ANGLE` from `src/solver.jl` (replaced by `initial_offsets` in `src/init.jl`).
-
-## v0.1.0
-
-Initial release. Force-directed label-repel recipe for Makie.
+- `solve_repel`'s `init_state` kwarg (added in 0.1.0 via the annotation-algorithm spike) is now the channel through which the recipe injects Imhof-derived initial positions.
+- `init_offsets` and `_GOLDEN_ANGLE` (`src/solver.jl`) are retained: they back the default branch of `solve_repel` and are called by `TextRepelAlgorithm` for warm-starts.
 ```
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add Project.toml CHANGELOG.md
-git commit -m "Bump version to 0.2.0 and add CHANGELOG"
+git commit -m "Bump to 0.2.0 and document Voronoi init + crossing repair in CHANGELOG"
 ```
 
 ---
@@ -1615,7 +1564,9 @@ git log --oneline main..HEAD
 git diff --stat main
 ```
 
-Confirm the diff scope matches the spec's File Structure section: 5 new source files, 2 new test files, 1 new CHANGELOG, modifications to Project.toml/MakieTextRepel.jl/solver.jl/connectors.jl/recipe.jl/runtests.jl/test_solver.jl/test_connectors.jl/test_integration.jl.
+Confirm the diff scope matches the spec's "Module layout" section: 5 new source files (`voronoi.jl`, `init.jl`, `crossings.jl`, `solvers/abstract.jl`, `solvers/force.jl`), 2 new test files (`test_init.jl`, `test_crossings.jl`), modifications to `Project.toml`/`CHANGELOG.md`/`src/MakieTextRepel.jl`/`src/connectors.jl`/`src/recipe.jl`/`test/runtests.jl`/`test/test_solver.jl` (Task 11 pinning testset only)/`test/test_connectors.jl`/`test/test_integration.jl`.
+
+`src/solver.jl` and `src/annotation_algorithm.jl` should be **unchanged**. If `git diff main -- src/solver.jl src/annotation_algorithm.jl` shows anything, investigate — that's a regression.
 
 No extra files touched. No scope creep.
 

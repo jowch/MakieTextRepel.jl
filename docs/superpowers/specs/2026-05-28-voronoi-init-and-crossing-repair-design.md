@@ -3,7 +3,7 @@
 **Status:** Approved for implementation
 **Date:** 2026-05-28
 **Tracking issues:** #8 (deferred Julia-native solvers), #9 (deferred Bentley-Ottmann)
-**Revision:** r3 — reviewer-converged version. r1 → r2 changed dependency to `DelaunayTriangulation.jl`, corrected diagonal Imhof slot padding for AABB semantics, weakened the sparse-data non-crossing claim, re-grounded the termination proof on label-center distances, added `dropped` plumbing through the crossings pass, specified `only_move`/n<3/NaN handling, and added release-prep items. r2 → r3 softened the strict-decrease claim for the collinear-degenerate case, anchored the NaN/Inf guard at `voronoi_cells`, rewrote the integration test snippet to use real API shape, noted the `clip_polygon` Tuple form, and trimmed two aspirational items.
+**Revision:** r4 — rebased on main after the `annotation-algorithm-spike` PR (#10) landed. r1 → r2 changed dependency to `DelaunayTriangulation.jl`, corrected diagonal Imhof slot padding for AABB semantics, weakened the sparse-data non-crossing claim, re-grounded the termination proof on label-center distances, added `dropped` plumbing through the crossings pass, specified `only_move`/n<3/NaN handling, and added release-prep items. r2 → r3 softened the strict-decrease claim for the collinear-degenerate case, anchored the NaN/Inf guard at `voronoi_cells`, rewrote the integration test snippet to use real API shape, noted the `clip_polygon` Tuple form, and trimmed two aspirational items. r3 → r4 (a) retargets the solver integration onto the spike-landed `solve_repel` kwarg API (`init_state`, NamedTuple return, `RepelParams(base; ...)` copy constructor); (b) retains `init_offsets` and `_GOLDEN_ANGLE` because `src/annotation_algorithm.jl` calls them as the `reset=true` warm-start path; (c) refreshes `src/solver.jl` line references to post-spike values.
 
 ## Motivation
 
@@ -53,15 +53,20 @@ Every label goes through every step. Voronoi cells inform initialization but are
 ```
 src/
   recipe.jl          — public API, reactive graph (light edits to call new pipeline)
-  solver.jl          — solve_repel signature gains initial_offsets argument; internals unchanged
+  solver.jl          — solve_repel unchanged in signature (already accepts `init_state` kwarg
+                      from the spike PR); init_offsets and _GOLDEN_ANGLE RETAINED for
+                      annotation_algorithm.jl's reset=true warm-start path
   solvers/
     abstract.jl      — NEW. AbstractClusterSolver interface (internal, not exported)
     force.jl         — NEW. ForceSolver <: AbstractClusterSolver wraps solve_repel
   voronoi.jl         — NEW. Cell computation + cell-fit predicate
-  init.jl            — NEW. Imhof slot selection given cells
+  init.jl            — NEW. Imhof slot selection given cells (named initial_offsets to avoid
+                      collision with retained init_offsets in solver.jl)
   crossings.jl       — NEW. connector_for + find_crossings + repair_crossings!
   geometry.jl        — existing, with helpers added
   connectors.jl      — existing, factored to share connector_for
+  annotation_algorithm.jl — existing (spike PR #10); v0.2 must not break its
+                            init_offsets call in the reset=true branch
 ```
 
 **On the `AbstractClusterSolver` abstraction.** This adds a type and a wrapper for a single concrete implementation in v0.2 — a fair YAGNI critique. We are keeping it because it's the seam for issue #8's planned Julia-native solver implementations (ODE-based, AD-energy-based), and adding it now lets `solve_repel`'s call site stabilize at the new dispatch shape before a second implementation lands, avoiding a more invasive refactor later. The cost is small: an abstract type, a one-field wrapper struct, and one method.
@@ -122,7 +127,7 @@ For each anchor:
 - If no slot fits (cell is `nothing`, cell too small, etc.), fall back to TR.
 - After slot selection, apply `_constrain(offset, params.only_move)` so the existing `only_move = :x | :y | :both` semantics are honored from the very first iteration.
 
-This replaces `init_offsets(n, psizes)` at `src/solver.jl:36-47`. The `_GOLDEN_ANGLE` constant (`src/solver.jl:19`) and its callers are removed.
+This is the new initialization entry point for the `textrepel!` pipeline. Naming uses `initial_offsets` (with the trailing `s`) to disambiguate from the existing `init_offsets` at `src/solver.jl:48-59`, which is retained because `src/annotation_algorithm.jl:176` calls it for the `reset = true` warm-start path. The `_GOLDEN_ANGLE` constant at `src/solver.jl:31` is also retained for the same reason. The recipe pipeline switches to `initial_offsets`; the annotation-algorithm pipeline continues to use `init_offsets`.
 
 ### Solver abstraction (`src/solvers/`)
 
@@ -136,11 +141,11 @@ end
 solve_cluster(s::AbstractClusterSolver,
               anchors::Vector{Point2f},
               sizes::Vector{Vec2f},
-              init_offsets::Vector{Point2f},
-              bounds::Rect2f)::Tuple{Vector{Point2f}, BitVector}
+              initial_offsets::Vector{Vec2f},
+              bounds::Rect2f)::Tuple{Vector{Vec2f}, BitVector}
 ```
 
-`ForceSolver` is the single concrete implementation in v0.2. It dispatches `solve_cluster` to a lightly-wrapped `solve_repel` that accepts pre-computed `init_offsets` instead of generating golden-angle initialization internally. The returned `BitVector` is the `dropped` flags from `solve_repel`'s existing `max_overlaps` logic.
+`ForceSolver` is the single concrete implementation in v0.2. It dispatches `solve_cluster` to `solve_repel`, passing the Voronoi-derived `initial_offsets` through the spike-PR `init_state` kwarg and using `RepelParams(s.params; bounds = bounds)` to override the params' bounds without touching other fields. `solve_repel` returns a NamedTuple `(; offsets, dropped, iter, residual)` (see `src/solver.jl:192-197`); `solve_cluster` returns the first two as a tuple to preserve the v0.2-internal calling convention. The returned `BitVector` is the `dropped` flags from `solve_repel`'s existing `max_overlaps` logic.
 
 The interface is **internal-only in v0.2**: not exported, not surfaced as a `textrepel!` attribute. v0.3 will expose a public `solver = …` selector once a second implementation (e.g., `ODESolver` per issue #8) exists.
 
@@ -233,7 +238,7 @@ Termination is therefore **not** guaranteed by `S` strictly decreasing in all ca
 
 ## Reactivity
 
-The recipe's single `lift` node already depends on `(anchors, sizes, params, bounds_obs)` in v0.1 (`src/recipe.jl:74-89`). The new pipeline is pure over the same observables — Voronoi computation, initialization, solver call, and repair pass are all pure functions of those four inputs. **No new reactive dependencies are added.** A single `lift` continues to drive the whole pipeline.
+The recipe's single `lift` node already depends on `(anchors, sizes, params, bounds_obs)` (`src/recipe.jl:74-90` post-spike). The new pipeline is pure over the same observables — Voronoi computation, initialization, solver call, and repair pass are all pure functions of those inputs. **One new reactive dependency:** `min_segment_length` joins the lift because `repair_crossings!` uses it to determine which connectors are visible (and therefore eligible to cross). A single `lift` continues to drive the whole pipeline.
 
 ## Backward compatibility
 
@@ -244,8 +249,8 @@ The recipe's single `lift` node already depends on `(anchors, sizes, params, bou
 
 ### Release prep
 
-- **Version bump:** `Project.toml` version from `0.1.x` to `0.2.0`.
-- **CHANGELOG:** the repo does not currently have a `CHANGELOG.md`. v0.2 creates one at the repo root; the v0.2 entry is the first item.
+- **Version bump:** `Project.toml` version from `0.1.0` to `0.2.0`.
+- **CHANGELOG:** the repo gained a `CHANGELOG.md` in spike PR #10 with an "Unreleased" 0.1.0 section. v0.2 closes out that section (rename heading to `## [0.1.0]` with a date) and adds a new `## [0.2.0]` section above it.
 - **Dependency:** add `DelaunayTriangulation` to `[deps]` and a compat bound `DelaunayTriangulation = "1.6"` in `[compat]`. Run `Pkg.update()` to regenerate `Manifest.toml`.
 - **`[sources]` workaround** (per memory `makietextrepel-release-blockers`): unrelated to this design; tracked separately.
 
@@ -300,22 +305,23 @@ test/
     plt = textrepel!(ax, case.anchors; text = case.labels, case.kwargs...)
     Makie.update_state_before_display!(fig)        # forces lift evaluation
 
-    offsets = plt.offsets[]                         # reads the converged Observable
-    dropped = plt.dropped[]
-    sizes   = plt.sizes[]
-    px_anchors = plt.px_anchors[]
-    params  = plt.params[]
+    attrs = plt.attributes
+    offsets    = attrs[:computed_offsets][]
+    dropped    = attrs[:computed_dropped][]
+    sizes      = attrs[:computed_sizes][]
+    px_anchors = attrs[:computed_anchors][]
+    params     = attrs[:computed_params][]
 
     connectors = [connector_for(px_anchors[i], offsets[i], sizes[i], dropped[i], params)
                   for i in eachindex(offsets)]
 
     @test all(isfinite, offsets)
-    @test all(i -> dropped[i] || within_bounds(offsets[i], case.viewport), eachindex(offsets))
+    @test all(i -> dropped[i] || within_bounds(offsets[i], params.bounds), eachindex(offsets))
     @test isempty(find_crossings(connectors))
 end
 ```
 
-The "no crossings" assertion is the load-bearing behavioral guarantee of v0.2. `case` is a NamedTuple defined per fixture (sparse, dense, mixed) carrying `anchors`, `labels`, `limits`, `viewport`, and any per-case keyword overrides. The Observable names (`plt.offsets`, `plt.dropped`, `plt.sizes`, `plt.px_anchors`, `plt.params`) match what `recipe.jl` will register on the plot — they are part of this design.
+The "no crossings" assertion is the load-bearing behavioral guarantee of v0.2. `case` is a NamedTuple defined per fixture (sparse, dense, mixed) carrying `anchors`, `labels`, `limits`, and any per-case keyword overrides. The five `:computed_*` ComputeGraph inputs match what the recipe will register (extending today's `:computed_offsets` from `src/recipe.jl:94`) — they are part of this design.
 
 ### Out of scope for CI
 
