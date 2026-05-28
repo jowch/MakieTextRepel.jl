@@ -60,6 +60,14 @@ feature needs nothing new from it.
   inside the edge — the gutter emerges from the existing padding, with no separate inset
   (avoids double-counting). Clamping *inside* the loop (not as a one-shot post-pass) lets
   repulsion and confinement reach equilibrium together so edges don't re-pile.
+- **Step-cap cooling (convergence fix).** Decay the per-iteration step cap linearly over
+  the run: at iteration `it`, use `step_max · max(0, 1 − it/max_iter)` instead of a
+  constant `step_max`. Without this, tightly edge-crowded labels pinned against a
+  boundary settle into a period-2 limit cycle (overlap-push vs. spring) and spin to
+  `max_iter` rather than converging. This is a **pre-existing** base-solver weakness
+  (the same crowded inputs fail to converge with `bounds = nothing` too) that clamping
+  merely exposes; cooling fixes it generally and is deterministic (no new parameter,
+  no effect on the non-crowded cases that already converge in a few iterations).
 
 ### Clamp helper (`src/geometry.jl`)
 
@@ -74,23 +82,37 @@ other pure AABB helpers; no Makie dependency.
 
 ### Recipe (`src/recipe.jl`)
 
-- Obtain the plot's **scene viewport** as an observable. Anchors are already in
-  scene-local pixels (origin at the axis lower-left, via `register_projected_positions!`),
-  so the clamp rectangle in that frame is the raw viewport `Rect2f(0, 0, vp_width, vp_height)`
-  — no inset (the solver clamps the *padded* box, which produces the edge gutter).
-- Add the viewport observable as a **new dependency of the solve `lift`** and pass the
-  viewport rectangle as `RepelParams.bounds`. The lift re-runs on viewport change, so
-  labels re-solve and re-clamp on figure resize/layout — the first reactive behavior,
-  obtained for free.
+- Obtain the plot's **scene viewport** as an observable via
+  `Makie.viewport(Makie.parent_scene(p))` (an `Observable{Rect2i}`). `parent_scene(p)`
+  is the axis's *data-area* scene — it already excludes ticks/labels/title, so no
+  decoration subtraction is needed.
+- Build the clamp rectangle from the viewport's **size only**, discarding its origin:
+  ```julia
+  bounds_obs = lift(Makie.viewport(Makie.parent_scene(p))) do vp
+      Rect2f(0, 0, Float32.(widths(vp))...)
+  end
+  ```
+  **Critical:** the viewport `Rect2i` carries a *figure-relative* origin (the axis's
+  offset within the figure), but the `:pixel`-projected anchors are *scene-local*
+  (origin at the axis lower-left, always in `(0,0)–(w,h)`). Clamping against the raw
+  viewport rect would be off by the origin; we must use `(0, 0)–widths(vp)`. (Validated:
+  Makie's `pixel_space` is built from `widths(viewport)` only and never uses the origin.)
+- Add `bounds_obs` as a **new dependency of the solve `lift`** and pass its value as
+  `RepelParams.bounds`. The viewport observable updates on figure resize/layout, so the
+  lift re-runs → labels re-solve and re-clamp — the first reactive behavior, for free.
 
 ## Testing
 
 - **Pure solver** (core): with an explicit `bounds`, assert every final box lies fully
   within it; box sizes are unchanged; a label seeded near/over an edge ends up pulled
   inside. Include a degenerate case (label larger than bounds → pinned to lower edge,
-  no NaN). Existing determinism / no-overlap tests still pass.
+  no NaN; anchor outside bounds → still lands inside). `bounds = nothing` must be
+  byte-identical to today's output. Existing determinism / no-overlap tests still pass.
+- **Convergence (cooling)**: a tightly edge-crowded case converges (`maxmove < tol`)
+  within `max_iter` *and* stays in-bounds — guards the step-cap-cooling fix. (Without
+  cooling this case spins to `max_iter` in a limit cycle.)
 - **Clamp helper**: unit tests for box inside (zero shift), box over each edge (correct
-  inward shift), box larger than bounds (pinned).
+  inward shift), box larger than bounds (pinned to lower edge).
 - **Integration (CairoMakie)**: with a known figure/viewport, assert the recipe's
   `computed_offsets` keep all label boxes inside the scene viewport.
 - **Demo**: regenerate the README image and confirm labels no longer clip *without* the
