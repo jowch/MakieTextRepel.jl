@@ -296,6 +296,38 @@ end
                                                init_state = [Vec2f(0, 0)])
 end
 
+@testset "solve_repel — pin_mask and pinned_offsets" begin
+    anchors = [Point2f(0, 0), Point2f(50, 0), Point2f(100, 0)]
+    sizes   = [Vec2f(20, 10), Vec2f(20, 10), Vec2f(20, 10)]
+    p = RepelParams(max_iter = 100)
+
+    # Pin label 2 at a specific offset. Solver should leave it exactly there
+    # and place 1 and 3 around it.
+    pin_mask  = BitVector([false, true, false])
+    pinned    = [Vec2f(0, 0), Vec2f(20, 40), Vec2f(0, 0)]
+    r = solve_repel(anchors, sizes, p;
+                    pin_mask = pin_mask, pinned_offsets = pinned)
+
+    @test r.offsets[2] == Vec2f(20, 40)   # pinned exactly
+    # Other two labels moved; they're not still at the spiral init.
+    @test r.offsets[1] != Vec2f(0, 0)
+    @test r.offsets[3] != Vec2f(0, 0)
+
+    # Pin × only_move: a pinned offset with non-zero x with only_move = :y
+    # keeps its x (D6: pinning bypasses only_move).
+    p_y = RepelParams(max_iter = 100, only_move = :y)
+    r2 = solve_repel(anchors, sizes, p_y;
+                     pin_mask = BitVector([false, true, false]),
+                     pinned_offsets = [Vec2f(0, 0), Vec2f(20, 40), Vec2f(0, 0)])
+    @test r2.offsets[2] == Vec2f(20, 40)  # x kept despite only_move = :y
+
+    # nothing pin_mask + empty pinned_offsets === current default behavior.
+    r3 = solve_repel(anchors, sizes, p)
+    r4 = solve_repel(anchors, sizes, p;
+                     pin_mask = nothing, pinned_offsets = Vec2f[])
+    @test r3.offsets == r4.offsets
+end
+
 @testset "solve_repel returns NamedTuple with diagnostics" begin
     anchors = [Point2f(0, 0), Point2f(50, 0)]
     sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
