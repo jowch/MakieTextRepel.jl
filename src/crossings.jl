@@ -49,3 +49,31 @@ function swap_positions!(offsets::Vector{Vec2f}, anchors::Vector{Point2f}, i::In
     offsets[j] = Vec2f(pos_i_old .- anchors[j])
     return offsets
 end
+
+"""
+Iterate: scan for crossings; for each non-conflicting crossing pair swap label
+positions; repeat. Terminates when no crossings remain or `max_iter` exceeded.
+`min_len` matches `min_segment_length` from the recipe so the scan agrees with
+what `build_connectors` would render.
+
+Returns the number of outer iterations consumed (0 if no crossings on first scan).
+"""
+function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
+                           sizes::Vector{Vec2f}, dropped::BitVector,
+                           params; min_len::Real = 2.0, max_iter::Int = 100)
+    for iter in 1:max_iter
+        connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
+                      for i in eachindex(offsets)]
+        crossings = find_crossings(connectors)
+        isempty(crossings) && return iter - 1
+
+        swapped = Set{Int}()
+        for (i, j) in crossings
+            (i in swapped || j in swapped) && continue
+            swap_positions!(offsets, anchors, i, j)
+            push!(swapped, i)
+            push!(swapped, j)
+        end
+    end
+    return max_iter
+end

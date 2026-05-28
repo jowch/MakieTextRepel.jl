@@ -1,6 +1,7 @@
 using MakieTextRepel
 using MakieTextRepel: segments_cross, connector_for, Connector, RepelParams
 using GeometryBasics
+using LinearAlgebra: norm
 using Test
 
 @testset "segments_cross" begin
@@ -83,4 +84,41 @@ using MakieTextRepel: swap_positions!
     # offsets[2] = (2, 3) - (10, 0) = (-8, 3)
     @test offsets[1] ≈ Vec2f(9, 4)
     @test offsets[2] ≈ Vec2f(-8, 3)
+end
+
+using MakieTextRepel: repair_crossings!
+
+@testset "repair_crossings!" begin
+    # Construct a 2-label crossing: anchors on x-axis, labels swapped across.
+    anchors = [Point2f(0, 0), Point2f(10, 0)]
+    offsets = [Vec2f(12, 4), Vec2f(-12, 4)]
+    # absolute positions: label_1 at (12, 4) — leader (0,0)→(12,4); label_2 at (-2, 4) — leader (10,0)→(-2,4). Cross.
+    sizes = [Vec2f(4, 2), Vec2f(4, 2)]
+    dropped = BitVector([false, false])
+    params = RepelParams(box_padding = 1.0, point_padding = 0.5)
+
+    iters = repair_crossings!(offsets, anchors, sizes, dropped, params; min_len = 0.5)
+    @test iters ≤ 5  # should converge in 1 iteration
+    # Verify no crossings remain after repair.
+    connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, 0.5)
+                  for i in eachindex(anchors)]
+    @test isempty(find_crossings(connectors))
+
+    # Sum of center-distance has decreased.
+    @test norm(offsets[1]) + norm(offsets[2]) ≤ norm(Vec2f(12, 4)) + norm(Vec2f(-12, 4))
+
+    # Dropped label: its slot is skipped, others repair around it.
+    anchors2 = [Point2f(0, 0), Point2f(10, 0), Point2f(5, 5)]
+    offsets2 = [Vec2f(12, 4), Vec2f(-12, 4), Vec2f(0, 0)]
+    sizes2 = [Vec2f(4, 2), Vec2f(4, 2), Vec2f(4, 2)]
+    dropped2 = BitVector([false, false, true])
+    repair_crossings!(offsets2, anchors2, sizes2, dropped2, params; min_len = 0.5)
+    # Label 3 should never appear in any crossing pair → its offset is unchanged.
+    @test offsets2[3] == Vec2f(0, 0)
+
+    # max_iter cap: pathological alternating input doesn't hang.
+    # (Hard to construct a true cycle in floating point, so just assert termination.)
+    offsets3 = [Vec2f(12, 4), Vec2f(-12, 4)]
+    iters3 = repair_crossings!(offsets3, anchors, sizes, dropped, params; max_iter = 3, min_len = 0.5)
+    @test iters3 ≤ 3
 end
