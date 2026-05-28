@@ -16,6 +16,18 @@ Base.@kwdef struct RepelParams
     bounds::Union{Rect2f, Nothing} = nothing   # clamp region in solver (pixel) space; nothing = no clamp
 end
 
+"""
+    RepelParams(base::RepelParams; kwargs...) -> RepelParams
+
+Copy `base`, replacing any fields named in `kwargs`. All `RepelParams`
+fields not in `kwargs` are carried over unchanged.
+"""
+function RepelParams(base::RepelParams; kwargs...)
+    return RepelParams(;
+        (field => get(kwargs, field, getfield(base, field))
+         for field in fieldnames(RepelParams))...)
+end
+
 const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
 
 """
@@ -79,13 +91,35 @@ Returns `(offsets::Vector{Vec2f}, dropped::BitVector)`. `anchors` and `sizes`
 are in pixels; a label's box is centered at `anchor + offset`, padded by
 `params.box_padding`.
 """
-function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
+function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams;
+                     obstacles::Vector{Rect2f}                = Rect2f[],
+                     init_state::Union{Nothing,Vector{Vec2f}} = nothing,
+                     pin_mask::Union{Nothing,BitVector}        = nothing,
+                     pinned_offsets::Vector{Vec2f}             = Vec2f[])
     n = length(anchors)
-    n == 0 && return (Vec2f[], falses(0))
+    n == 0 && return (; offsets = Vec2f[], dropped = falses(0), iter = 0, residual = 0f0)
     @assert length(sizes) == n "anchors and sizes must have equal length"
 
     psizes = [s .+ 2 * Float32(p.box_padding) for s in sizes]
-    offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]
+    if init_state !== nothing
+        length(init_state) == n || throw(DimensionMismatch(
+            "init_state length $(length(init_state)) does not match anchors length $n"))
+        offsets = [_constrain(o, p.only_move) for o in init_state]
+    else
+        offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]
+    end
+
+    if pin_mask !== nothing
+        length(pin_mask) == n || throw(DimensionMismatch(
+            "pin_mask length $(length(pin_mask)) does not match anchors length $n"))
+        length(pinned_offsets) == n || throw(DimensionMismatch(
+            "pinned_offsets length $(length(pinned_offsets)) does not match anchors length $n"))
+        for i in 1:n
+            if pin_mask[i]
+                offsets[i] = pinned_offsets[i]   # bypasses only_move (D6)
+            end
+        end
+    end
 
     fx, fy   = Float32.(p.force)
     ppx, ppy = Float32.(p.force_point)
@@ -93,6 +127,9 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
     pad      = Float32(p.point_padding)
     smax0    = Float32(p.step_max)
     pthr     = Float32(p.pull_threshold)
+
+    final_iter = 0
+    final_residual = 0f0
 
     for it in 1:p.max_iter
         # Step-cap cooling: linearly decay the per-iteration move cap so crowded,
@@ -104,6 +141,10 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
         boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
         Δ = Vector{Vec2f}(undef, n)
         for i in 1:n
+            if pin_mask !== nothing && pin_mask[i]
+                Δ[i] = Vec2f(0, 0)
+                continue
+            end
             f = Vec2f(0, 0)
             for j in 1:n
                 i == j && continue
@@ -111,12 +152,14 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                 f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             for j in 1:n
-                # Own anchor is included: keeps isolated labels off their own
-                # point. `force_pull` (below) provides the inward balance, so
-                # the label settles near (not on) the anchor, at `≈ hw + pad +
-                # point_padding` along the dominant axis.
+                # Own anchor included: keeps isolated labels off their own point.
+                # force_pull (below) provides the inward balance.
                 pp = point_push(boxes[i], anchors[j], pad)
                 f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
+            end
+            for ob in obstacles
+                push = overlap_push(boxes[i], ob)
+                f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             off = offsets[i]
             if norm(off) > pthr
@@ -126,20 +169,30 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
         end
         maxmove = 0f0
         for i in 1:n
+            if pin_mask !== nothing && pin_mask[i]
+                continue  # pinned: skip update, keep pinned_offsets[i]
+            end
             d = _constrain(_clamp_step(Δ[i], smax), p.only_move)
             newoff = offsets[i] .+ d
             if p.bounds !== nothing
                 box = box_at(anchors[i], newoff, psizes[i])
-                # Constrain the clamp shift too, so confinement never moves a label
-                # along an axis the user locked via only_move.
+                # Constrain the clamp shift too, so confinement never moves
+                # a label along an axis the user locked via only_move.
                 newoff = newoff .+ _constrain(clamp_box_offset(box, p.bounds), p.only_move)
             end
             move = newoff .- offsets[i]
             offsets[i] = newoff
             maxmove = max(maxmove, norm(move))
         end
+        final_iter = it
+        final_residual = maxmove
         maxmove < p.tol && break
     end
 
-    return (offsets, compute_drops(anchors, offsets, psizes, p.max_overlaps))
+    return (;
+        offsets,
+        dropped = compute_drops(anchors, offsets, psizes, p.max_overlaps),
+        iter    = final_iter,
+        residual = final_residual,
+    )
 end

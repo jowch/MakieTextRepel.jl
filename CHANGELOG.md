@@ -36,6 +36,24 @@ gates distribution).
 - Tunable attributes: `force`, `force_point`, `force_pull` (anisotropic `(x, y)`
   tuples), `only_move` (`:both`/`:x`/`:y`), `max_iter`, `box_padding`,
   `point_padding`, plus connector and background styling.
+- `TextRepelAlgorithm` — algorithm plug-in for `Makie.annotation!` that reuses
+  the same force-directed solver underneath `annotation!`'s styling
+  (`Ann.Styles.LineArrow()`, custom paths, arrow heads). Constructed via
+  keyword forwarding (`TextRepelAlgorithm(; force, only_move, ..., obstacles)`)
+  or from an explicit `RepelParams`. Supports per-label pinning (mix finite and
+  `NaN` entries in `textpositions_offset` — finite ones become pinned offsets,
+  `NaN` entries auto-place around them), warm-start under `advance_optimization!`
+  (`reset=false`), and obstacle avoidance via an `obstacles::Vector{Rect2f}`
+  keyword. `solve_stats(alg)` returns `(iter, residual)` diagnostics from the
+  most recent solve. README has a "Two surfaces" section comparing it to
+  `textrepel!`.
+- `solve_repel` extended with `obstacles`, `init_state`, `pin_mask`,
+  `pinned_offsets` keyword arguments (all optional, defaults preserve prior
+  behavior). Returns a NamedTuple `(; offsets, dropped, iter, residual)` so
+  callers can introspect convergence; existing positional-destructure call
+  sites (`a, b = solve_repel(...)`) still work because NamedTuples support
+  positional iteration.
+- `RepelParams(base::RepelParams; kwargs...)` copy-with-overrides constructor.
 - README with a `text!`-vs-`textrepel!` hero image, a runnable example
   (`examples/readme_example.jl`), a visual smoke test, and GitHub Actions CI.
 
