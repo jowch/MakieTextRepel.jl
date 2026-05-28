@@ -46,3 +46,30 @@ end
     # wider than bounds on x → pinned to the lower (left) edge: origin.x → 0
     @test clamp_box_offset(Rect2f(20, 10, 200, 20), bounds) ≈ Vec2f(-20, 0)
 end
+
+@testset "clip_to_box_edge: inside-box and boundary" begin
+    box = box_at(Point2f(0, 0), Vec2f(0, 0), Vec2f(4, 4))   # box: x ∈ [-2, 2], y ∈ [-2, 2]
+
+    # strictly inside on both axes → nothing
+    @test clip_to_box_edge(box, Point2f(0.5, 0.5)) === nothing
+
+    # exact center → nothing (subsumed by strict-inside)
+    @test clip_to_box_edge(box, Point2f(0, 0)) === nothing
+
+    # target on a face (|d_x| = hw, |d_y| < hh) → valid face endpoint at t = 1
+    edge = clip_to_box_edge(box, Point2f(2, 0))
+    @test edge !== nothing
+    @test edge ≈ Point2f(2, 0)
+
+    # target on a corner (|d_x| = hw and |d_y| = hh) → valid corner endpoint
+    edge_c = clip_to_box_edge(box, Point2f(2, 2))
+    @test edge_c !== nothing
+    @test edge_c ≈ Point2f(2, 2)
+
+    # target outside on x only → near face on x, clipped (regression of existing case)
+    @test clip_to_box_edge(box, Point2f(100, 0)) ≈ Point2f(2, 0)
+
+    # target outside on both axes diagonally → corner of the box on the limiting axis
+    # For (4, 4): t = min(2/4, 2/4) = 0.5, edge = (2, 2)
+    @test clip_to_box_edge(box, Point2f(4, 4)) ≈ Point2f(2, 2)
+end

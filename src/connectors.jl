@@ -16,6 +16,7 @@ function build_connectors(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
         psize = sizes[i] .+ 2pad
         box = box_at(anchors[i], offsets[i], psize)
         edge = clip_to_box_edge(box, anchors[i])
+        edge === nothing && continue       # anchor strictly inside padded box
         push!(segs, anchors[i], edge)
     end
     return segs

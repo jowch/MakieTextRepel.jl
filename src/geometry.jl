@@ -46,17 +46,20 @@ end
 
 """
 Point on the boundary of `box` along the ray from the box center toward `target`
-(ggrepel-style connector attachment). Returns the center if `target` == center.
+(ggrepel-style connector attachment). Returns `nothing` when `target` lies
+strictly inside the box on both axes — no clean segment can be drawn. A target
+on a face or corner is a valid endpoint at `t = 1`.
 """
 function clip_to_box_edge(box::Rect2f, target::Point2f)
     c = _center(box)
     d = target .- c
-    (d[1] == 0 && d[2] == 0) && return c
     hw = box.widths[1] / 2
     hh = box.widths[2] / 2
+    # strict-inside: a target on the boundary is still a valid endpoint
+    (abs(d[1]) < hw && abs(d[2]) < hh) && return nothing
     tx = d[1] == 0 ? Inf32 : hw / abs(d[1])
     ty = d[2] == 0 ? Inf32 : hh / abs(d[2])
-    t = min(tx, ty)
+    t = clamp(min(tx, ty), 0f0, 1f0)   # defensive; strict-inside already guards
     return Point2f(c .+ t .* d)
 end
 
