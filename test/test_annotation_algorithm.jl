@@ -42,3 +42,12 @@ end
     @test_logs (:warn, r"max_overlaps") TextRepelAlgorithm(
         RepelParams(max_overlaps = 3))
 end
+
+@testset "solve_stats — initial state" begin
+    alg = TextRepelAlgorithm()
+    s = solve_stats(alg)
+    @test s isa NamedTuple
+    @test propertynames(s) == (:iter, :residual)
+    @test s.iter == 0
+    @test s.residual === 0f0
+end
