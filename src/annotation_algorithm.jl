@@ -148,7 +148,13 @@ function Makie.calculate_best_offsets!(
                                 bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
         align_bias = Vec2f[Vec2f(c[1] - a[1], c[2] - a[2])
                            for (c, a) in zip(bbox_centers, anchors)]
-        init_state = align_bias
+        # Tie-break for coincident anchors: add per-index golden-angle
+        # perturbation. Same spiral the solver uses internally for
+        # init_offsets — without it, coincident anchors with identical
+        # bboxes share an init_state and collapse.
+        psizes = Vec2f[sizes[i] .+ 2 * Float32(alg.params.box_padding) for i in 1:n]
+        spiral = init_offsets(anchors, psizes, alg.params)
+        init_state = Vec2f[align_bias[i] + spiral[i] for i in 1:n]
     else
         init_state = Vec2f[Vec2f(o[1], o[2]) for o in offsets]
     end
