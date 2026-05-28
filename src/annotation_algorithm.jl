@@ -138,7 +138,9 @@ function Makie.calculate_best_offsets!(
     #   pushes from the data point. Returned offsets get align_bias added back
     #   so annotation! receives a displacement reflecting the bbox alignment.
     # - reset=false (warm-start): incoming offsets are textposition-relative
-    #   from the previous solve; they go in directly and come out directly.
+    #   from the previous solve (annotation! writes back whatever we put in
+    #   `offsets`, so warm-starting needs no coordinate change). They go in
+    #   directly and come out directly.
     if reset
         bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
                                 bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
@@ -146,7 +148,6 @@ function Makie.calculate_best_offsets!(
                            for (c, a) in zip(bbox_centers, anchors)]
         init_state = align_bias
     else
-        align_bias = Vec2f[Vec2f(0, 0) for _ in 1:n]
         init_state = Vec2f[Vec2f(o[1], o[2]) for o in offsets]
     end
 
@@ -161,9 +162,11 @@ function Makie.calculate_best_offsets!(
     for i in 1:n
         if pin_mask[i]
             offsets[i] = T(pinned_offsets[i][1], pinned_offsets[i][2])
-        else
+        elseif reset
             o = result.offsets[i] .+ align_bias[i]
             offsets[i] = T(o[1], o[2])
+        else
+            offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
         end
     end
     return
