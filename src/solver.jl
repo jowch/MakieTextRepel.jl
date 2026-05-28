@@ -92,13 +92,20 @@ are in pixels; a label's box is centered at `anchor + offset`, padded by
 `params.box_padding`.
 """
 function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams;
-                     obstacles::Vector{Rect2f} = Rect2f[])
+                     obstacles::Vector{Rect2f} = Rect2f[],
+                     init_state::Union{Nothing,Vector{Vec2f}} = nothing)
     n = length(anchors)
     n == 0 && return (; offsets = Vec2f[], dropped = falses(0), iter = 0, residual = 0f0)
     @assert length(sizes) == n "anchors and sizes must have equal length"
 
     psizes = [s .+ 2 * Float32(p.box_padding) for s in sizes]
-    offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]
+    if init_state !== nothing
+        length(init_state) == n || throw(DimensionMismatch(
+            "init_state length $(length(init_state)) does not match anchors length $n"))
+        offsets = [_constrain(o, p.only_move) for o in init_state]
+    else
+        offsets = [_constrain(o, p.only_move) for o in init_offsets(anchors, psizes, p)]
+    end
 
     fx, fy   = Float32.(p.force)
     ppx, ppy = Float32.(p.force_point)

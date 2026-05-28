@@ -274,6 +274,28 @@ end
     end
 end
 
+@testset "solve_repel — init_state kwarg" begin
+    anchors = [Point2f(0, 0), Point2f(100, 0)]
+    sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
+    p = RepelParams(max_iter = 50)
+
+    # nothing → behaves identically to the default-init path.
+    a = solve_repel(anchors, sizes, p)
+    b = solve_repel(anchors, sizes, p; init_state = nothing)
+    @test a.offsets == b.offsets
+
+    # Custom init → that's what the loop starts from.
+    custom = [Vec2f(10, 5), Vec2f(-10, 5)]
+    c = solve_repel(anchors, sizes, p; init_state = custom)
+    # After one iteration the offsets diverge from custom but the residual
+    # is non-trivially different from running fresh.
+    @test c.offsets != a.offsets
+
+    # Length-mismatched init_state raises.
+    @test_throws DimensionMismatch solve_repel(anchors, sizes, p;
+                                               init_state = [Vec2f(0, 0)])
+end
+
 @testset "solve_repel returns NamedTuple with diagnostics" begin
     anchors = [Point2f(0, 0), Point2f(50, 0)]
     sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
