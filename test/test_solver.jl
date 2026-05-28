@@ -77,7 +77,7 @@ end
     @test all(o -> all(isfinite, o), oc)
 end
 
-using MakieTextRepel: compute_drops
+using MakieTextRepel: compute_drops, clamp_box_offset
 
 @testset "compute_drops" begin
     anchors = [Point2f(0, 0), Point2f(1, 0), Point2f(2, 0)]
@@ -93,4 +93,35 @@ using MakieTextRepel: compute_drops
     # dropped; each end overlaps only the middle (count 1) and survives.
     dropped = compute_drops(anchors, offsets, psizes, 1)
     @test dropped == BitVector([false, true, false])
+end
+
+@testset "solve_repel clamping" begin
+    bounds = Rect2f(0, 0, 200, 120)
+    pad = 4.0
+    # padded box of label i at its solved offset
+    pbox(anchors, offsets, sizes, i) =
+        box_at(anchors[i], offsets[i], sizes[i] .+ Vec2f(2f0 * Float32(pad)))
+
+    # anchors hugging the edges/corners; every final padded box must stay inside
+    anchors = [Point2f(5, 5), Point2f(195, 5), Point2f(5, 115),
+               Point2f(195, 115), Point2f(100, 60)]
+    sizes = fill(Vec2f(40, 16), 5)
+    offsets, _ = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = bounds))
+    for i in eachindex(anchors)
+        b = pbox(anchors, offsets, sizes, i)
+        @test b.origin[1] >= -1e-2
+        @test b.origin[2] >= -1e-2
+        @test b.origin[1] + b.widths[1] <= 200 + 1e-2
+        @test b.origin[2] + b.widths[2] <= 120 + 1e-2
+    end
+
+    # bounds = nothing is the same as not passing bounds at all (clamp truly off)
+    a = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = nothing))[1]
+    b = solve_repel(anchors, sizes, RepelParams(box_padding = pad))[1]
+    @test a == b
+
+    # degenerate: label wider than bounds → pinned, finite, no NaN
+    big, _ = solve_repel([Point2f(100, 60)], [Vec2f(400, 10)],
+                         RepelParams(box_padding = 0.0, bounds = bounds))
+    @test all(isfinite, big[1])
 end

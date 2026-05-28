@@ -13,6 +13,7 @@ Base.@kwdef struct RepelParams
     step_max::Float64               = 10.0          # per-iteration px clamp
     pull_threshold::Float64         = 1.0           # px; suppress spring within this
     tol::Float64                    = 0.1           # convergence: max move < tol
+    bounds::Union{Rect2f, Nothing} = nothing   # clamp region in solver (pixel) space; nothing = no clamp
 end
 
 const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
@@ -112,8 +113,14 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
         maxmove = 0f0
         for i in 1:n
             d = _constrain(_clamp_step(Δ[i], smax), p.only_move)
-            offsets[i] = offsets[i] .+ d
-            maxmove = max(maxmove, norm(d))
+            newoff = offsets[i] .+ d
+            if p.bounds !== nothing
+                box = box_at(anchors[i], newoff, psizes[i])
+                newoff = newoff .+ clamp_box_offset(box, p.bounds)
+            end
+            move = newoff .- offsets[i]
+            offsets[i] = newoff
+            maxmove = max(maxmove, norm(move))
         end
         maxmove < p.tol && break
     end
