@@ -91,7 +91,8 @@ Returns `(offsets::Vector{Vec2f}, dropped::BitVector)`. `anchors` and `sizes`
 are in pixels; a label's box is centered at `anchor + offset`, padded by
 `params.box_padding`.
 """
-function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams)
+function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelParams;
+                     obstacles::Vector{Rect2f} = Rect2f[])
     n = length(anchors)
     n == 0 && return (; offsets = Vec2f[], dropped = falses(0), iter = 0, residual = 0f0)
     @assert length(sizes) == n "anchors and sizes must have equal length"
@@ -132,6 +133,10 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                 # point_padding` along the dominant axis.
                 pp = point_push(boxes[i], anchors[j], pad)
                 f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
+            end
+            for ob in obstacles
+                push = overlap_push(boxes[i], ob)
+                f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             off = offsets[i]
             if norm(off) > pthr

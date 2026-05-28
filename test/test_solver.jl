@@ -230,6 +230,50 @@ end
     end
 end
 
+@testset "solve_repel — obstacles kwarg" begin
+    # Helper: compute the label's padded bbox at its final offset, fully
+    # inline so the test doesn't depend on internal helper exports.
+    function _label_bbox(anchor::Point2f, offset::Vec2f, size::Vec2f, pad::Real)
+        psize = size .+ 2 * Float32(pad)
+        center = anchor .+ offset
+        Rect2f(center[1] - psize[1]/2, center[2] - psize[2]/2,
+               psize[1], psize[2])
+    end
+    function _overlaps(a::Rect2f, b::Rect2f)
+        return !(a.origin[1] + a.widths[1] <= b.origin[1] ||
+                 b.origin[1] + b.widths[1] <= a.origin[1] ||
+                 a.origin[2] + a.widths[2] <= b.origin[2] ||
+                 b.origin[2] + b.widths[2] <= a.origin[2])
+    end
+
+    # Two labels on either side of an obstacle. Without the obstacle they
+    # settle close to their anchors; the obstacle pushes them clear.
+    anchors = [Point2f(0, 50), Point2f(100, 50)]
+    sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
+    p = RepelParams(max_iter = 500, point_padding = 0.0)
+    obstacle = Rect2f(40, 40, 20, 20)   # blocks the corridor between them
+
+    # Sanity: empty obstacles vector === no-op vs not passing obstacles at all.
+    a = solve_repel(anchors, sizes, p)
+    b = solve_repel(anchors, sizes, p; obstacles = Rect2f[])
+    @test a.offsets == b.offsets
+
+    # With an obstacle, neither resulting bbox overlaps it.
+    c = solve_repel(anchors, sizes, p; obstacles = [obstacle])
+    for i in 1:2
+        bb = _label_bbox(anchors[i], c.offsets[i], sizes[i], p.box_padding)
+        @test !_overlaps(bb, obstacle)
+    end
+
+    # Multiple disjoint obstacles: same invariant for each.
+    obs2 = [Rect2f(40, 40, 20, 20), Rect2f(40, 10, 20, 20)]
+    d = solve_repel(anchors, sizes, p; obstacles = obs2)
+    for i in 1:2, o in obs2
+        bb = _label_bbox(anchors[i], d.offsets[i], sizes[i], p.box_padding)
+        @test !_overlaps(bb, o)
+    end
+end
+
 @testset "solve_repel returns NamedTuple with diagnostics" begin
     anchors = [Point2f(0, 0), Point2f(50, 0)]
     sizes   = [Vec2f(20, 10), Vec2f(20, 10)]
