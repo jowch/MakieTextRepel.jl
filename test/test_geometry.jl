@@ -1,4 +1,4 @@
-using MakieTextRepel: box_at, overlap_push, point_push, clip_to_box_edge
+using MakieTextRepel: box_at, overlap_push, point_push, clip_to_box_edge, clamp_box_offset
 using GeometryBasics
 
 @testset "geometry" begin
@@ -30,4 +30,19 @@ using GeometryBasics
     # clip_to_box_edge: point on the box boundary toward the target
     edge = clip_to_box_edge(box, Point2f(100, 0))   # target far to the right
     @test edge ≈ Point2f(2, 0)                       # right edge at x=+2
+end
+
+@testset "clamp_box_offset" begin
+    bounds = Rect2f(0, 0, 100, 100)
+
+    # fully inside → zero shift
+    @test clamp_box_offset(Rect2f(10, 10, 20, 20), bounds) == Vec2f(0, 0)
+    # over the right edge → pushed left by the overshoot
+    @test clamp_box_offset(Rect2f(90, 10, 20, 20), bounds) ≈ Vec2f(-10, 0)
+    # over the bottom edge → pushed up
+    @test clamp_box_offset(Rect2f(10, -5, 20, 20), bounds) ≈ Vec2f(0, 5)
+    # over left and top → pushed right and down
+    @test clamp_box_offset(Rect2f(-5, 90, 20, 20), bounds) ≈ Vec2f(5, -10)
+    # wider than bounds on x → pinned to the lower (left) edge: origin.x → 0
+    @test clamp_box_offset(Rect2f(20, 10, 200, 20), bounds) ≈ Vec2f(-20, 0)
 end

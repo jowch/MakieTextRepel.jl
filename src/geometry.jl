@@ -59,3 +59,25 @@ function clip_to_box_edge(box::Rect2f, target::Point2f)
     t = min(tx, ty)
     return Point2f(c .+ t .* d)
 end
+
+# Per-axis corrective shift to bring one interval inside another, preserving width.
+# If the box is wider than the bounds on this axis, pin it to the lower edge.
+function _clamp_axis(lo, hi, blo, bhi, w, bw)
+    w  > bw  && return blo - lo   # larger than bounds → pin lower edge
+    lo < blo && return blo - lo   # over lower edge → push toward +
+    hi > bhi && return bhi - hi   # over upper edge → push toward -
+    return 0f0
+end
+
+"""
+Minimal shift to bring `box` fully inside `bounds`, preserving its size. Returns a
+zero vector if it already fits. If `box` is larger than `bounds` on an axis, pins it
+to that axis's lower edge.
+"""
+function clamp_box_offset(box::Rect2f, bounds::Rect2f)
+    lo, hi   = box.origin, box.origin .+ box.widths
+    blo, bhi = bounds.origin, bounds.origin .+ bounds.widths
+    sx = _clamp_axis(lo[1], hi[1], blo[1], bhi[1], box.widths[1], bounds.widths[1])
+    sy = _clamp_axis(lo[2], hi[2], blo[2], bhi[2], box.widths[2], bounds.widths[2])
+    return Vec2f(sx, sy)
+end
