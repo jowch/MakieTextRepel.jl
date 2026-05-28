@@ -1,6 +1,5 @@
 using CairoMakie
 using MakieTextRepel
-include(joinpath(@__DIR__, "..", "src", "annotation_algorithm.jl"))
 
 points = [(-2.15, -0.19), (-1.66, 0.78), (-1.56, 0.87), (-0.97, -1.91),
           (-0.96, -0.25), (-0.79, 2.6),  (-0.74, 1.68),  (-0.56, -0.44),

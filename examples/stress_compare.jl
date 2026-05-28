@@ -12,7 +12,6 @@
 using CairoMakie
 using MakieTextRepel
 using Random
-include(joinpath(@__DIR__, "..", "src", "annotation_algorithm.jl"))
 
 const OUTDIR = joinpath(@__DIR__, "..", "test", "output")
 mkpath(OUTDIR)
