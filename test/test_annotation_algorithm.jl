@@ -545,3 +545,20 @@ end
     # converge to the same point.
     @test length(Set(offsets)) > n ÷ 2
 end
+
+@testset "Stability canary — Makie.calculate_best_offsets! dispatches" begin
+    # Confirms the hook symbol exists and dispatches on a TextRepelAlgorithm
+    # with the documented kwargs. If a Makie upgrade renames or re-signatures
+    # this hook, this test fails loudly in CI before users hit it at runtime.
+
+    @test isdefined(Makie, :calculate_best_offsets!)
+    # Check method signature exists with the right positional and keyword arguments.
+    # If the signature changed, this will throw.
+    Makie.calculate_best_offsets!(
+        TextRepelAlgorithm(),
+        Vec2f[], Point2f[], Point2f[], Rect2f[], Rect2f(0, 0, 1, 1);
+        maxiter = Makie.automatic,
+        labelspace = :relative_pixel,
+        reset = true)
+    @test true  # If no error, the signature is correct.
+end
