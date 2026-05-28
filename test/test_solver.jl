@@ -39,6 +39,19 @@ using LinearAlgebra
     @test norm(init_offsets(zero_anchor, zero_sz, p)[1]) >= 1.0f0 - 1e-4
 end
 
+@testset "RepelParams copy-with-overrides constructor" begin
+    base = RepelParams(force = (2.0, 2.0), max_iter = 100)
+    overridden = RepelParams(base; max_iter = 50)
+    @test overridden.force == (2.0, 2.0)         # carried over
+    @test overridden.max_iter == 50              # overridden
+    @test overridden.bounds === nothing          # default carried over
+
+    bnds = Rect2f(0, 0, 100, 100)
+    with_bounds = RepelParams(base; bounds = bnds)
+    @test with_bounds.bounds == bnds
+    @test with_bounds.force == (2.0, 2.0)        # unchanged
+end
+
 using MakieTextRepel: solve_repel
 using MakieTextRepel: box_at
 

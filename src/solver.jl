@@ -16,6 +16,18 @@ Base.@kwdef struct RepelParams
     bounds::Union{Rect2f, Nothing} = nothing   # clamp region in solver (pixel) space; nothing = no clamp
 end
 
+"""
+    RepelParams(base::RepelParams; kwargs...) -> RepelParams
+
+Copy `base`, replacing any fields named in `kwargs`. All `RepelParams`
+fields not in `kwargs` are carried over unchanged.
+"""
+function RepelParams(base::RepelParams; kwargs...)
+    return RepelParams(;
+        (field => get(kwargs, field, getfield(base, field))
+         for field in fieldnames(RepelParams))...)
+end
+
 const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
 
 """
