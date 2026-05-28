@@ -36,8 +36,10 @@
 **Untouched by this plan:**
 - `src/solver.jl` — `solve_repel` already accepts the `init_state` kwarg (from spike PR #10). `init_offsets` and `_GOLDEN_ANGLE` are RETAINED because `src/annotation_algorithm.jl` calls `init_offsets` for the `reset=true` warm-start at `src/annotation_algorithm.jl:176`. The new `src/init.jl` defines `initial_offsets` (with trailing `s`) so the names don't collide.
 - `src/annotation_algorithm.jl` — not modified by this plan.
-- `test/test_solver.jl` — not modified by this plan. Its existing `solve_repel` calls remain valid (they exercise the default `init_state === nothing` path and the kwarg signature is backwards-compatible).
 - `test/test_annotation_algorithm.jl` — not modified.
+
+**Touched once, lightly:**
+- `test/test_solver.jl` — Task 12 appends a single `"ForceSolver wraps solve_repel"` testset that asserts `solve_cluster` agrees with `solve_repel(...; init_state = init)`. The existing solver testsets stay as-is; they already exercise the default `init_state === nothing` path and the kwarg signature is backwards-compatible.
 
 ---
 
@@ -1091,65 +1093,36 @@ git commit -m "Add repair_crossings!: scan + non-conflicting batched swaps with 
 
 ---
 
-### Task 11: Pin the spike-landed `init_state` kwarg + `RepelParams` copy constructor
+### Task 11: Confirm green baseline before solver-abstraction work
 
-**Files:**
-- Modify: `test/test_solver.jl`
+**Files:** none (verification only)
 
-**Intent:** Spike PR #10 already landed (a) `solve_repel(...; init_state, obstacles, pin_mask, pinned_offsets)` returning a `(; offsets, dropped, iter, residual)` NamedTuple (see `src/solver.jl:94-198`), and (b) `RepelParams(base::RepelParams; kwargs...)` copy constructor (see `src/solver.jl:25-29`). Tasks 12 and 13 depend on both. Lock the contract with a focused test so any future refactor that drops these stays caught at the unit level.
+**Intent:** Spike PR #10 already landed everything Tasks 12 and 13 need:
 
-`src/solver.jl` is **not modified by this task**. `init_offsets` and `_GOLDEN_ANGLE` are retained throughout — `src/annotation_algorithm.jl:176` calls `init_offsets` for the `reset=true` warm-start path.
+- `solve_repel(...; init_state, obstacles, pin_mask, pinned_offsets)` at `src/solver.jl:94-198`, returning the NamedTuple `(; offsets, dropped, iter, residual)`. Already covered by the `"solve_repel — init_state kwarg"` testset at `test/test_solver.jl:276`, the `"solve_repel returns NamedTuple with diagnostics"` testset at `test/test_solver.jl:330`, plus the existing `obstacles`, `pin_mask`, and `pinned_offsets` testsets.
+- `RepelParams(base::RepelParams; kwargs...)` at `src/solver.jl:25-29`. Already covered by `"RepelParams copy-with-overrides constructor"` at `test/test_solver.jl:42`.
 
-- [ ] **Step 1: Add the pinning testset**
+`src/solver.jl` is **not modified by this task or by any other task in this plan**. `init_offsets` and `_GOLDEN_ANGLE` are retained — `src/annotation_algorithm.jl:176` calls `init_offsets` for the `reset=true` warm-start path.
 
-Append to `test/test_solver.jl`:
+The original Task 11 in earlier plan revisions added a positional `initial_offsets` argument to `solve_repel`. That work is now a no-op because the spike PR landed the kwarg form. The task remains in the plan only to preserve numbering relative to downstream tasks (12-16) and to register a green-baseline checkpoint before Task 12 begins source-code changes.
 
-```julia
-@testset "v0.2 prereqs: init_state kwarg and RepelParams copy constructor" begin
-    # `init_state` kwarg path — fresh start overridden, output deterministic.
-    anchors = [Point2f(0, 0), Point2f(40, 0)]
-    sizes   = [Vec2f(10, 4), Vec2f(10, 4)]
-    init    = [Vec2f(10, 0), Vec2f(-10, 0)]
-    p = RepelParams(box_padding = 0.0, max_iter = 200)
+- [ ] **Step 1: Confirm the spike-landed prereqs cover the v0.2 dependencies**
 
-    r = solve_repel(anchors, sizes, p; init_state = init)
-    @test r isa NamedTuple
-    @test Set(propertynames(r)) == Set([:offsets, :dropped, :iter, :residual])
-    @test length(r.offsets) == 2
-    @test all(isfinite, r.offsets)
-
-    # Wrong-length init_state must throw.
-    @test_throws DimensionMismatch solve_repel(anchors, sizes, p;
-                                               init_state = [Vec2f(0, 0)])
-
-    # Copy constructor — only listed field changes; others carried over verbatim.
-    base = RepelParams(force = (3.0, 3.0), max_iter = 123, box_padding = 7.5)
-    bumped = RepelParams(base; max_iter = 999)
-    @test bumped.max_iter == 999
-    @test bumped.force == (3.0, 3.0)
-    @test bumped.box_padding == 7.5
-
-    # Bounds override leaves everything else intact.
-    withb = RepelParams(base; bounds = Rect2f(0, 0, 100, 100))
-    @test withb.bounds == Rect2f(0, 0, 100, 100)
-    @test withb.max_iter == 123
-end
+```bash
+grep -n '"solve_repel — init_state kwarg"\|"RepelParams copy-with-overrides constructor"\|"solve_repel returns NamedTuple with diagnostics"' test/test_solver.jl
 ```
 
-- [ ] **Step 2: Run, expect pass**
+Expected: three matches at the line numbers cited above. If any are missing, the spike PR has drifted since this plan was written — stop and reconcile before continuing.
+
+- [ ] **Step 2: Run the full suite — must be green before Task 12**
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.test()'
 ```
 
-Expected: all tests pass. The new testset validates that the spike's API surface is what Tasks 12 and 13 need.
+Expected: all existing tests pass. This baseline is the reference; if Task 12 or 13 introduces a regression, you compare to this run.
 
-- [ ] **Step 3: Commit**
-
-```bash
-git add test/test_solver.jl
-git commit -m "Pin v0.2 prereqs: solve_repel init_state kwarg + RepelParams copy ctor"
-```
+No commit for this task. Move to Task 12.
 
 ---
 
@@ -1556,7 +1529,7 @@ git log --oneline main..HEAD
 git diff --stat main
 ```
 
-Confirm the diff scope matches the spec's "Module layout" section: 5 new source files (`voronoi.jl`, `init.jl`, `crossings.jl`, `solvers/abstract.jl`, `solvers/force.jl`), 2 new test files (`test_init.jl`, `test_crossings.jl`), modifications to `Project.toml`/`CHANGELOG.md`/`src/MakieTextRepel.jl`/`src/connectors.jl`/`src/recipe.jl`/`test/runtests.jl`/`test/test_solver.jl` (Task 11 pinning testset only)/`test/test_connectors.jl`/`test/test_integration.jl`.
+Confirm the diff scope matches the spec's "Module layout" section: 5 new source files (`voronoi.jl`, `init.jl`, `crossings.jl`, `solvers/abstract.jl`, `solvers/force.jl`), 2 new test files (`test_init.jl`, `test_crossings.jl`), modifications to `Project.toml`/`CHANGELOG.md`/`src/MakieTextRepel.jl`/`src/connectors.jl`/`src/recipe.jl`/`test/runtests.jl`/`test/test_solver.jl` (Task 12 ForceSolver testset only)/`test/test_connectors.jl`/`test/test_integration.jl`.
 
 `src/solver.jl` and `src/annotation_algorithm.jl` should be **unchanged**. If `git diff main -- src/solver.jl src/annotation_algorithm.jl` shows anything, investigate — that's a regression.
 
