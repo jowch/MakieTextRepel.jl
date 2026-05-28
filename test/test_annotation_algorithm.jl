@@ -115,3 +115,32 @@ end
     end
     @test solve_stats(alg) == (iter = 0, residual = 0f0)
 end
+
+@testset "dispatch — alignment-correct anchor (D5)" begin
+    # Same textposition, same widths, two different alignments.
+    textpositions        = [Point2f(50, 50)]
+    textpositions_offset = [Point2f(NaN, NaN)]
+    viewport             = Rect2f(0, 0, 500, 500)
+
+    # Center-aligned bbox: origin = textposition - widths/2.
+    text_bbs_center = [Rect2f(30, 45, 40, 10)]
+    offsets_center  = [Vec2f(0, 0)]
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets_center,
+        textpositions, textpositions_offset, text_bbs_center, viewport;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # Left-aligned bbox: origin = textposition (bbox extends right).
+    text_bbs_left = [Rect2f(50, 45, 40, 10)]
+    offsets_left  = [Vec2f(0, 0)]
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), offsets_left,
+        textpositions, textpositions_offset, text_bbs_left, viewport;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # With the alignment fix, the left-aligned solve's offset is shifted
+    # right by approximately widths/2 = 20px relative to the centered one
+    # (the alignment pre-bias is added to init_state). Without the fix,
+    # both solves are anchored identically and the delta would be ~0.
+    delta = offsets_left[1] - offsets_center[1]
+    @test isapprox(delta[1], 20f0, atol = 5.0)
+    @test isapprox(delta[2], 0f0,  atol = 5.0)
+end

@@ -131,13 +131,24 @@ function Makie.calculate_best_offsets!(
         max_iter = mi,
     )
 
-    result = solve_repel(anchors, sizes, effective_params)
+    # Alignment pre-bias (D5): init the solver with the label already at bbox_center
+    # so own-anchor repulsion pushes from the data point, not the bbox center.
+    # We also add align_bias to the final offsets so annotation! gets the correct
+    # displacement for non-center alignments.
+    bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
+                            bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
+    align_bias   = [Vec2f(c[1] - a[1], c[2] - a[2])
+                    for (c, a) in zip(bbox_centers, anchors)]
+
+    result = solve_repel(anchors, sizes, effective_params;
+                         init_state = align_bias)
 
     alg.last_iter[] = result.iter
     alg.last_residual[] = result.residual
 
     for i in 1:n
-        offsets[i] = T(result.offsets[i][1], result.offsets[i][2])
+        o = result.offsets[i] .+ align_bias[i]
+        offsets[i] = T(o[1], o[2])
     end
     return
 end
