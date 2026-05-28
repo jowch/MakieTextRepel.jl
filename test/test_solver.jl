@@ -77,7 +77,7 @@ end
     @test all(o -> all(isfinite, o), oc)
 end
 
-using MakieTextRepel: compute_drops
+using MakieTextRepel: compute_drops, clamp_box_offset
 
 @testset "compute_drops" begin
     anchors = [Point2f(0, 0), Point2f(1, 0), Point2f(2, 0)]
@@ -93,4 +93,70 @@ using MakieTextRepel: compute_drops
     # dropped; each end overlaps only the middle (count 1) and survives.
     dropped = compute_drops(anchors, offsets, psizes, 1)
     @test dropped == BitVector([false, true, false])
+end
+
+@testset "solve_repel clamping" begin
+    bounds = Rect2f(0, 0, 200, 120)
+    pad = 4.0
+    # padded box of label i at its solved offset
+    pbox(anchors, offsets, sizes, i) =
+        box_at(anchors[i], offsets[i], sizes[i] .+ Vec2f(2f0 * Float32(pad)))
+
+    # anchors hugging the edges/corners; every final padded box must stay inside
+    anchors = [Point2f(5, 5), Point2f(195, 5), Point2f(5, 115),
+               Point2f(195, 115), Point2f(100, 60)]
+    sizes = fill(Vec2f(40, 16), 5)
+    offsets, _ = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = bounds))
+    for i in eachindex(anchors)
+        b = pbox(anchors, offsets, sizes, i)
+        @test b.origin[1] >= -1e-2
+        @test b.origin[2] >= -1e-2
+        @test b.origin[1] + b.widths[1] <= 200 + 1e-2
+        @test b.origin[2] + b.widths[2] <= 120 + 1e-2
+    end
+
+    # bounds = nothing is the same as not passing bounds at all (clamp truly off)
+    a = solve_repel(anchors, sizes, RepelParams(box_padding = pad, bounds = nothing))[1]
+    b = solve_repel(anchors, sizes, RepelParams(box_padding = pad))[1]
+    @test a == b
+
+    # degenerate: label wider than bounds → pinned, finite, no NaN
+    big, _ = solve_repel([Point2f(100, 60)], [Vec2f(400, 10)],
+                         RepelParams(box_padding = 0.0, bounds = bounds))
+    @test all(isfinite, big[1])
+end
+
+@testset "solve_repel clamp respects only_move" begin
+    # Label anchored past the top of the bounds (y), under only_move = :x. The clamp
+    # must not introduce the forbidden y motion: its y-offset must match the unclamped
+    # run, while x is still confined inside the bounds.
+    anchors = [Point2f(195, 130)]
+    sizes = [Vec2f(40, 20)]
+    bounds = Rect2f(0, 0, 200, 100)
+    ox  = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = bounds))[1]
+    oxn = solve_repel(anchors, sizes, RepelParams(only_move = :x, box_padding = 0.0, bounds = nothing))[1]
+    @test abs(ox[1][2] - oxn[1][2]) < 1e-3        # clamp left the forbidden y axis alone
+    bx = box_at(anchors[1], ox[1], sizes[1])
+    @test bx.origin[1] >= -1e-3                   # x still confined
+    @test bx.origin[1] + bx.widths[1] <= 200 + 1e-3
+end
+
+@testset "solve_repel converges under edge-crowding" begin
+    # Wide labels crammed into a small box → they crowd against the walls. Without
+    # step-cap cooling this settles into a period-2 limit cycle. We compare adjacent
+    # iteration counts (N vs N+1) precisely because that lands on opposite phases of a
+    # period-2 cycle: if it were still cycling the two would differ by the cycle
+    # amplitude (measured ≈10px uncooled), whereas a settled solution differs
+    # negligibly (≈0.1px). Adjacent counts catch parity cycling that a same-parity
+    # mid-run pair (e.g. 2000 vs 3000) would miss.
+    bounds = Rect2f(0, 0, 80, 48)   # small enough that labels crowd the walls
+    anchors = [Point2f(12, 12), Point2f(45, 12), Point2f(78, 12),
+               Point2f(28, 43), Point2f(62, 43)]
+    sizes = fill(Vec2f(46, 18), 5)
+    pa = RepelParams(box_padding = 2.0, bounds = bounds, max_iter = 3000)
+    pb = RepelParams(box_padding = 2.0, bounds = bounds, max_iter = 3001)
+    oa = solve_repel(anchors, sizes, pa)[1]
+    ob = solve_repel(anchors, sizes, pb)[1]
+    @test maximum(norm.(oa .- ob)) < 1.0   # converged, not limit-cycling
+    @test all(o -> all(isfinite, o), oa)
 end

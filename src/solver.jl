@@ -13,6 +13,7 @@ Base.@kwdef struct RepelParams
     step_max::Float64               = 10.0          # per-iteration px clamp
     pull_threshold::Float64         = 1.0           # px; suppress spring within this
     tol::Float64                    = 0.1           # convergence: max move < tol
+    bounds::Union{Rect2f, Nothing} = nothing   # clamp region in solver (pixel) space; nothing = no clamp
 end
 
 const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
@@ -85,10 +86,16 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
     ppx, ppy = Float32.(p.force_point)
     plx, ply = Float32.(p.force_pull)
     pad      = Float32(p.point_padding)
-    smax     = Float32(p.step_max)
+    smax0    = Float32(p.step_max)
     pthr     = Float32(p.pull_threshold)
 
-    for _ in 1:p.max_iter
+    for it in 1:p.max_iter
+        # Step-cap cooling: linearly decay the per-iteration move cap so crowded,
+        # wall-pinned labels settle instead of limit-cycling. Deterministic. Applied
+        # only on the clamped path — the recipe always sets bounds, while the bare
+        # `bounds === nothing` solver path stays byte-identical to its pre-clamping output.
+        smax = p.bounds === nothing ? smax0 :
+               smax0 * max(0f0, 1f0 - Float32(it) / Float32(p.max_iter))
         boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
         Δ = Vector{Vec2f}(undef, n)
         for i in 1:n
@@ -112,8 +119,16 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
         maxmove = 0f0
         for i in 1:n
             d = _constrain(_clamp_step(Δ[i], smax), p.only_move)
-            offsets[i] = offsets[i] .+ d
-            maxmove = max(maxmove, norm(d))
+            newoff = offsets[i] .+ d
+            if p.bounds !== nothing
+                box = box_at(anchors[i], newoff, psizes[i])
+                # Constrain the clamp shift too, so confinement never moves a label
+                # along an axis the user locked via only_move.
+                newoff = newoff .+ _constrain(clamp_box_offset(box, p.bounds), p.only_move)
+            end
+            move = newoff .- offsets[i]
+            offsets[i] = newoff
+            maxmove = max(maxmove, norm(move))
         end
         maxmove < p.tol && break
     end

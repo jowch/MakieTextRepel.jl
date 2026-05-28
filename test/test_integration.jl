@@ -87,3 +87,25 @@ end
     @test lims.widths[1] < 5
     @test lims.widths[2] < 5
 end
+
+@testset "clamping keeps labels inside the axis viewport" begin
+    fig = Figure(size = (420, 360)); ax = Axis(fig[1, 1])
+    pts = Point2f[(0, 0), (1, 0), (0, 1), (1, 1), (0.5, 0.5)]
+    labels = ["alphalabel", "betalabel", "gammalabel", "deltalabel", "epsilonlabel"]
+    pl = textrepel!(ax, pts; text = labels)
+    Makie.update_state_before_display!(fig.scene)
+
+    offs = pl.computed_offsets[]
+    vp = Makie.widths(Makie.viewport(ax.scene)[])          # scene-local size
+    sizes = MakieTextRepel.measure_labels(labels, pl.font[], pl.fontsize[], 1.0)
+    pad = Float32(pl.box_padding[])
+    for i in eachindex(pts)
+        apx = Makie.project(ax.scene, :data, :pixel, pts[i])
+        anchor = Point2f(apx[1], apx[2])
+        box = MakieTextRepel.box_at(anchor, offs[i], sizes[i] .+ Vec2f(2pad))
+        @test box.origin[1] >= -1.0
+        @test box.origin[2] >= -1.0
+        @test box.origin[1] + box.widths[1] <= vp[1] + 1.0
+        @test box.origin[2] + box.widths[2] <= vp[2] + 1.0
+    end
+end
