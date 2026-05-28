@@ -12,5 +12,6 @@ include("solver.jl")
 include("connectors.jl")
 include("measure.jl")
 include("recipe.jl")
+include("annotation_algorithm.jl")
 
 end # module MakieTextRepel
