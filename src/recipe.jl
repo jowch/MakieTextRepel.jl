@@ -73,9 +73,9 @@ function Makie.plot!(p::TextRepel)
     # 2. Measure + solve. Recomputes when anchors/text/font/size or params change.
     solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
                   p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
-                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs) do px, labels, fs, font,
-                                                                                 fr, frp, fpl, mi, om,
-                                                                                 bp, pp, mo, bnds
+                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs, p.min_segment_length) do px, labels, fs, font,
+                                                                                                       fr, frp, fpl, mi, om,
+                                                                                                       bp, pp, mo, bnds, ml
         anchors = [Point2f(q[1], q[2]) for q in px]
         sizes = measure_labels(labels, font, fs, 1.0)
         params = RepelParams(; force = Tuple(Float64.(fr)),
@@ -84,14 +84,22 @@ function Makie.plot!(p::TextRepel)
                                max_iter = Int(mi), only_move = Symbol(om),
                                box_padding = Float64(bp), point_padding = Float64(pp),
                                max_overlaps = Float64(mo), bounds = bnds)
-        s = solve_repel(anchors, sizes, params)
-        offsets, dropped = s.offsets, s.dropped
-        (; anchors, sizes, offsets, dropped)
+        # `bounds_obs` (lines 69-71) always yields a Rect2f, so `bnds` is never
+        # `nothing` on the recipe path — feed it straight through to the pipeline.
+        cells = voronoi_cells(anchors, bnds)
+        init = initial_offsets(anchors, sizes, cells, params)
+        offsets, dropped = solve_cluster(ForceSolver(params), anchors, sizes, init, bnds)
+        repair_crossings!(offsets, anchors, sizes, dropped, params; min_len = Float64(ml))
+        (; anchors, sizes, offsets, dropped, params)
     end
 
     # Expose offsets for testing / downstream use. NOTE: in Makie 0.24 `p.attributes`
     # is a ComputeGraph, not a dict — use `add_input!`, not `setindex!`.
     Makie.add_input!(p.attributes, :computed_offsets, lift(s -> s.offsets, solved))
+    Makie.add_input!(p.attributes, :computed_anchors, lift(s -> s.anchors, solved))
+    Makie.add_input!(p.attributes, :computed_sizes,   lift(s -> s.sizes,   solved))
+    Makie.add_input!(p.attributes, :computed_dropped, lift(s -> s.dropped, solved))
+    Makie.add_input!(p.attributes, :computed_params,  lift(s -> s.params,  solved))
 
     # 3. Render text at original DATA positions with per-label pixel offsets,
     #    filtering out dropped labels.

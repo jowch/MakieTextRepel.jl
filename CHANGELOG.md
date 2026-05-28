@@ -5,7 +5,28 @@ All notable changes to MakieTextRepel.jl are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-05-28
+
+Layouts are now initialized using Imhof-preferred slots within each anchor's Voronoi cell when geometry allows, and a post-solve repair pass eliminates leader-line crossings on the typical inputs we've measured. Existing user code runs unchanged; output positions will differ from v0.1.
+
+### Added
+
+- Voronoi-informed initialization (`src/voronoi.jl`, `src/init.jl`) — labels start at the highest-preference Imhof slot (TR > R > T > BR > L > BL > B > TL) that fits inside their anchor's Voronoi cell, with TR fallback when none fit.
+- Crossing repair (`src/crossings.jl`) — deterministic 2-opt position-swap pass that converges to a crossing-free layout in 1–3 outer iterations on the integration fixtures (sparse, dense, mixed) and is bounded by `max_iter = 100`. The non-crossing property is best-effort with a backstop: `repair_crossings!` emits a `@warn` on the rare cap-out case where residual crossings remain after the final scan, so silent degradation can't slip through.
+- Internal `AbstractClusterSolver` interface (`src/solvers/`) — seam for future Julia-native solver implementations.
+- New dependency: `DelaunayTriangulation.jl` (≥ 1.6). The Voronoi step wraps DT.jl in a `try`/`catch` so any DT failure on degenerate inputs (near-collinear points, etc.) degrades to all-TR Imhof placement rather than crashing the compute graph.
+
+### Changed
+
+- `textrepel!` recipe pipeline now Voronoi-initializes label positions and runs a post-solve crossing-repair pass. Output offsets differ from v0.1 even for identical inputs.
+
+### Notes
+
+- `solve_repel`'s `init_state` kwarg (added in 0.1.0 via the annotation-algorithm spike) is now the channel through which the recipe injects Imhof-derived initial positions.
+- `init_offsets` and `_GOLDEN_ANGLE` (`src/solver.jl`) are retained: they back the default branch of `solve_repel` and are called by `TextRepelAlgorithm` for warm-starts.
+- The non-crossing property scopes to `textrepel!` only; `TextRepelAlgorithm` (the `Makie.annotation!` plug-in) does not get the repair pass in v0.2.
+
+## [0.1.0] - 2026-05-28
 
 Initial `0.1.0` feature set. Nothing has been tagged or registered yet; everything
 below is pending the first release (see issue #5 — the `[sources]` URL flip — which
@@ -68,4 +89,5 @@ gates distribution).
   `Makie.boundingbox` so axis autolimits track only the data anchors and are not
   inflated by the pixel-space text, box, and connector children.
 
-[Unreleased]: https://github.com/jowch/MakieTextRepel.jl/commits/main
+[0.2.0]: https://github.com/jowch/MakieTextRepel.jl/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/jowch/MakieTextRepel.jl/releases/tag/v0.1.0

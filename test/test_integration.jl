@@ -129,3 +129,81 @@ end
         @test box.origin[2] + box.widths[2] <= vp[2] + 1.0
     end
 end
+
+using MakieTextRepel: connector_for, find_crossings
+
+within_bounds(pos::Point2f, vp::Rect2f) =
+    vp.origin[1] <= pos[1] <= vp.origin[1] + vp.widths[1] &&
+    vp.origin[2] <= pos[2] <= vp.origin[2] + vp.widths[2]
+
+@testset "v0.2 pipeline invariants" begin
+    # Three case fixtures spanning sparsity regimes.
+    cases = [
+        (name = "sparse",
+         anchors = Point2f[(0.2, 0.2), (0.8, 0.2), (0.5, 0.8), (0.2, 0.8), (0.8, 0.8)],
+         labels = ["a", "b", "c", "d", "e"],
+         limits = (0, 1, 0, 1)),
+        (name = "dense",
+         anchors = Point2f[(0.5, 0.5), (0.51, 0.51), (0.49, 0.49), (0.5, 0.48)],
+         labels = ["alpha", "beta", "gamma", "delta"],
+         limits = (0.4, 0.6, 0.4, 0.6)),
+        (name = "mixed",
+         anchors = Point2f[(0.1, 0.1), (0.9, 0.9), (0.5, 0.51), (0.52, 0.49), (0.48, 0.5)],
+         labels = ["isolated_a", "isolated_b", "clu1", "clu2", "clu3"],
+         limits = (0, 1, 0, 1)),
+    ]
+
+    for case in cases
+        @testset "$(case.name)" begin
+            fig = Figure(size = (400, 400))
+            ax = Axis(fig[1, 1], limits = case.limits)
+            plt = textrepel!(ax, case.anchors; text = case.labels)
+            Makie.update_state_before_display!(fig)
+
+            offsets = plt.attributes[:computed_offsets][]
+            anchors = plt.attributes[:computed_anchors][]
+            sizes   = plt.attributes[:computed_sizes][]
+            dropped = plt.attributes[:computed_dropped][]
+            params  = plt.attributes[:computed_params][]
+            min_len = plt.min_segment_length[]
+
+            connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
+                          for i in eachindex(offsets)]
+            # Pixel-space viewport in axis-scene-local coordinates — same frame as `anchors`.
+            vp = params.bounds
+            @test all(isfinite, offsets)
+            @test all(i -> dropped[i] || within_bounds(anchors[i] + offsets[i], vp), eachindex(offsets))
+            @test isempty(find_crossings(connectors))
+        end
+    end
+end
+
+@testset "v0.2 max_overlaps interaction" begin
+    # Crowded layout: 6 long labels packed into a tiny viewport. With a 150×150 px
+    # figure and limits spanning 0.4–0.6, the axis-scene is only ~90 px wide while
+    # each label measures ~70 px — well over half the viewport. The solver can't
+    # spread all six without leaving residual overlaps, so max_overlaps = 2 drops
+    # the most crowded ones. We assert: (a) at least one label dropped, (b)
+    # connectors for non-dropped labels still have no crossings.
+    anchors = Point2f[(0.50, 0.50), (0.51, 0.50), (0.50, 0.51),
+                      (0.49, 0.50), (0.50, 0.49), (0.51, 0.51)]
+    labels = ["aaaaaaaa", "bbbbbbbb", "cccccccc",
+              "dddddddd", "eeeeeeee", "ffffffff"]
+
+    fig = Figure(size = (150, 150))
+    ax = Axis(fig[1, 1], limits = (0.4, 0.6, 0.4, 0.6))
+    plt = textrepel!(ax, anchors; text = labels, max_overlaps = 2)
+    Makie.update_state_before_display!(fig)
+
+    offsets   = plt.attributes[:computed_offsets][]
+    anchors_p = plt.attributes[:computed_anchors][]
+    sizes_p   = plt.attributes[:computed_sizes][]
+    dropped   = plt.attributes[:computed_dropped][]
+    params    = plt.attributes[:computed_params][]
+    min_len   = plt.min_segment_length[]
+
+    @test count(dropped) ≥ 1   # crowded enough that at least one was dropped
+    connectors = [connector_for(anchors_p[i], offsets[i], sizes_p[i], dropped[i], params, min_len)
+                  for i in eachindex(offsets)]
+    @test isempty(find_crossings(connectors))   # repair pass doesn't corrupt visible labels
+end
