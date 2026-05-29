@@ -90,8 +90,7 @@ using Test
     @test q2.overlaps == 0
 
     # Sub-0.5px touch is NOT counted as an overlap (the Q threshold split).
-    offs_touch = [Vec2f(0, 0), Vec2f(20.2, 0)]  # penetration 20-20.2 < 0 actually disjoint
-    offs_near  = [Vec2f(0, 0), Vec2f(19.7, 0)]  # penetration 0.3 < 0.5 → not counted
+    offs_near = [Vec2f(0, 0), Vec2f(19.7, 0)]  # penetration 20-19.7 = 0.3 < 0.5 → not counted
     @test label_cost(anchors, sizes; offsets = offs_near, bounds = bounds,
                      box_padding = bp, min_segment_length = 2.0).overlaps == 0
 
@@ -621,6 +620,25 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
         end
     end
 
+    # Global cost of an arrangement (overlap pairs · weight + total leader length).
+    # Greedy best-response is NOT globally monotone and can 2-cycle, so we keep the
+    # best arrangement seen across passes rather than trusting the last pass.
+    function global_cost(s)
+        tot = 0.0
+        for i in 1:n
+            b = box_at(anchors[i], s[i], psizes[i])
+            for j in (i+1):n
+                (overlap_push(b, box_at(anchors[j], s[j], psizes[j])) != Vec2f(0, 0)) && (tot += overlap_weight)
+            end
+            for ob in obstacles
+                (overlap_push(b, ob) != Vec2f(0, 0)) && (tot += overlap_weight)
+            end
+            tot += sqrt(Float64(s[i][1])^2 + Float64(s[i][2])^2)
+        end
+        return tot
+    end
+
+    best_sel = copy(sel); best_cost = global_cost(sel)
     for _ in 1:passes
         changed = false
         for i in 1:n
@@ -642,9 +660,11 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
             (besto != sel[i]) && (changed = true)
             sel[i] = besto
         end
+        gc = global_cost(sel)
+        if gc < best_cost; best_cost = gc; best_sel = copy(sel); end
         changed || break
     end
-    return sel
+    return best_sel
 end
 ```
 
@@ -710,15 +730,30 @@ mean_leader(offsets, dropped) = begin
     isempty(act) ? 0.0 : sum(sqrt(Float64(offsets[i][1])^2 + offsets[i][2]^2) for i in act)/length(act)
 end
 
-@testset "ProjectionSolver: zero overlap and ≤ force leader on a cluster" begin
+@testset "ProjectionSolver: zero overlap per scene; shorter leader in aggregate" begin
+    # Per-scene leader length is NOT a theorem (a sparse scene's force_pull can hug the
+    # anchor closer than a discrete Imhof slot). §7e validated the win in AGGREGATE
+    # (~2× shorter across knot/collinear/sparse). So assert zero-overlap per scene
+    # (the hard guarantee) and the leader win as an aggregate with a real margin.
     p = RepelParams()
-    bounds = Rect2f(0, 0, 380, 340)
-    anchors = [Point2f(90 + 8randn_stub(i), 250 + 8randn_stub(i+1)) for i in 1:12]
-    sizes   = [Vec2f(40, 15) for _ in 1:12]
-    rp = solve_cluster(ProjectionSolver(p), anchors, sizes, bounds)
-    rf = solve_cluster(ForceSolver(p), anchors, sizes, bounds)
-    @test novl(anchors, rp.offsets, sizes, p.box_padding; dropped = rp.dropped) == 0
-    @test mean_leader(rp.offsets, rp.dropped) ≤ mean_leader(rf.offsets, rf.dropped) + 1e-3
+    fixtures = [
+        ("knot",      Rect2f(0, 0, 380, 340),
+         [Point2f(90 + 8randn_stub(i), 250 + 8randn_stub(i+1)) for i in 1:12], Vec2f(40, 15)),
+        ("collinear", Rect2f(0, 0, 380, 340),
+         [Point2f(40 + 30i, 180) for i in 0:9], Vec2f(40, 15)),
+        ("scatter",   Rect2f(0, 0, 380, 340),
+         [Point2f(190 + 60randn_stub(i), 170 + 50randn_stub(i+2)) for i in 1:18], Vec2f(35, 15)),
+    ]
+    proj_total = 0.0; force_total = 0.0
+    for (name, bounds, anchors, sz) in fixtures
+        sizes = [sz for _ in 1:length(anchors)]
+        rp = solve_cluster(ProjectionSolver(p), anchors, sizes, bounds)
+        rf = solve_cluster(ForceSolver(p), anchors, sizes, bounds)
+        @test novl(anchors, rp.offsets, sizes, p.box_padding; dropped = rp.dropped) == 0  # hard, per scene
+        proj_total  += mean_leader(rp.offsets, rp.dropped)
+        force_total += mean_leader(rf.offsets, rf.dropped)
+    end
+    @test proj_total ≤ 0.9 * force_total      # aggregate leader win, generous margin
 end
 
 @testset "ProjectionSolver: over-capacity drops, survivors are overlap-free" begin
@@ -855,8 +890,16 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
                               obstacles = obstacles)
         repair_crossings!(offsets, anchors, sizes, falses(n), p;
                           min_len = p.min_segment_length, pin_mask = pin_mask)
-    else                            # RELAX / warm-start: legalize the given layout only
-        offsets = copy(init_state)
+    else                            # RELAX / warm-start: legalize the given layout only.
+        # Mirror solve_repel's init_state contract: constrain to only_move, and hold
+        # pinned labels at their fixed offset (the caller's pinned_offsets), not the
+        # warm value. Without this, pinned labels would be legalized away from their pin.
+        offsets = [_constrain(o, p.only_move) for o in init_state]
+        if pin_mask !== nothing
+            for i in 1:n
+                pin_mask[i] && (offsets[i] = pinned_offsets[i])
+            end
+        end
     end
 
     dropped = falses(n)
@@ -885,7 +928,8 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
             offsets[i] = lz.offsets[t]
         end
         (lz.residual ≤ 0.5f0 || count(!, dropped) ≤ 1) && break
-        drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask)
+        idx = drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask)
+        idx == 0 && break    # nothing eligible to drop (e.g. all survivors pinned) → stop, warn below
     end
 
     if lz.residual > 0.5f0
@@ -937,23 +981,34 @@ git commit -m "feat: add ProjectionSolver (side-select → legalize) composing t
 
 - [ ] **Step 1: Add the failing invariant assertion**
 
-In `test/test_integration.jl`, inside the `@testset "v0.2 pipeline invariants"` block (the per-case testset around lines 157–177), add a zero-overlap assertion next to the existing `find_crossings` check. First add the import alongside the existing `using MakieTextRepel: connector_for, find_crossings` (line 133):
+In `test/test_integration.jl`, the per-case testset (around lines 157–177) currently asserts a **hard** no-crossing guarantee: `@test isempty(find_crossings(connectors))` (line 176). Under v0.3 the hard guarantee shifts from no-crossing to **zero-overlap**: the pipeline runs `repair_crossings!` *before* the final `legalize`, and legalize's minimal nudge can re-introduce a crossing — so crossing-freeness becomes best-effort (no worse than ForceSolver), while zero-overlap is the new hard invariant.
+
+First extend the import on line 133 from `using MakieTextRepel: connector_for, find_crossings` to:
 
 ```julia
-using MakieTextRepel: connector_for, find_crossings, label_cost
+using MakieTextRepel: connector_for, find_crossings, label_cost, solve_cluster, ForceSolver
 ```
 
-Then, after the existing `@test isempty(find_crossings(connectors))` (line 176), add:
+Then **replace** the existing `@test isempty(find_crossings(connectors))` (line 176) with:
 
 ```julia
+            # v0.3 HARD guarantee: zero box overlap under ProjectionSolver.
             q = label_cost(anchors, sizes; offsets = offsets, bounds = vp, dropped = dropped,
                            box_padding = params.box_padding,
                            point_padding = params.point_padding,
                            min_segment_length = min_len)
-            @test q.overlaps == 0     # v0.3 zero-overlap guarantee under ProjectionSolver
+            @test q.overlaps == 0
+            # Crossings are best-effort in v0.3 (repair precedes the final legalize):
+            # assert no worse than the ForceSolver baseline on the same scene.
+            rf = solve_cluster(ForceSolver(params), anchors, sizes, vp)
+            force_conn = [connector_for(anchors[i], rf.offsets[i], sizes[i], rf.dropped[i], params, min_len)
+                          for i in eachindex(rf.offsets)]
+            @test length(find_crossings(connectors)) ≤ length(find_crossings(force_conn))
 ```
 
 (`vp` is the case viewport already in scope at line 175's `within_bounds(anchors[i] + offsets[i], vp)`.)
+
+> **If the `≤ force_conn` assertion fails on a dense fixture during implementation** (legalize re-introduced a crossing the force path avoided), that is the known best-effort limit. The documented refinement is to add a bounded post-legalize cleanup in `projection.jl` — `find_crossings`; if non-empty, one `repair_crossings!` + one `legalize` (overlap-safe, ends on legalize) — capped at 2 rounds. Add it only if a fixture actually trips the assertion; do not pre-emptively complicate the pipeline.
 
 - [ ] **Step 2: Run the suite to verify the new assertion fails**
 
@@ -1041,6 +1096,8 @@ struct TextRepelAlgorithm
 end
 ```
 
+Also refresh the now-stale prose in the type/module docstrings (the "force-directed solver" wording at `src/annotation_algorithm.jl:5–9` and `:32–34`) to say the algorithm uses MakieTextRepel's `ProjectionSolver` (side-select → legalize) and that `solve_stats` returns the Q diagnostics of the most recent solve.
+
 Update both constructors (lines ~66 and ~75) to build the solver from `params`:
 
 ```julia
@@ -1064,7 +1121,13 @@ solve_stats(alg::TextRepelAlgorithm) = alg.solver.stats[]
 
 - [ ] **Step 5: Use the owned solver in `calculate_best_offsets!` and drop the manual Ref writes**
 
-In `calculate_best_offsets!`: at the `reset` early-out (lines ~126–127) remove the two manual Ref resets (`alg.last_iter[] = 0` / `alg.last_residual[] = 0f0`) — there is nothing to reset on the struct anymore; the stats Ref is overwritten by the next real solve.
+In `calculate_best_offsets!`: the **all-pinned bypass** (the `if all(pin_mask)` block at `src/annotation_algorithm.jl:122–129`, which returns before any solve) currently sets `alg.last_iter[] = 0` / `alg.last_residual[] = 0f0`. Those Refs no longer exist. Replace the two lines with a single write of a zeroed Q tuple to the solver's Ref, so `solve_stats` reports a clean all-pinned result instead of stale values:
+
+```julia
+        alg.solver.stats[] = (; overlaps = 0, mean_leader = 0f0, crossings = 0,
+                                iter = 0, residual = 0f0, dropped = 0)
+        return
+```
 
 Change the solver call (line ~178) to solve on the algorithm's **owned** solver, so that `solve_cluster` writes Q into the very `stats` Ref that `solve_stats(alg)` reads. `effective_params` differs from `alg.params` only by `max_iter`, which `ProjectionSolver` ignores (it has no force loop), so calling on `alg.solver` directly is correct:
 
@@ -1104,7 +1167,7 @@ git commit -m "feat: ProjectionSolver default for TextRepelAlgorithm; solve_stat
 
 - [ ] **Step 1: Register the new test files**
 
-In `test/runtests.jl`, add the four new includes inside the `@testset "MakieTextRepel.jl"` block, after `include("test_crossings.jl")`:
+In `test/runtests.jl`, insert the four NEW includes between the existing `include("test_crossings.jl")` (line 11) and the existing `include("test_annotation_algorithm.jl")` (line 12). Do **not** re-add `test_annotation_algorithm.jl` — it is already there. The block becomes:
 
 ```julia
     include("test_crossings.jl")
@@ -1114,6 +1177,8 @@ In `test/runtests.jl`, add the four new includes inside the `@testset "MakieText
     include("test_projection_solver.jl")
     include("test_annotation_algorithm.jl")
 ```
+
+(Only the four middle lines are new; the first and last already exist — this just shows the final ordering.)
 
 - [ ] **Step 2: Run the full suite and capture every failure**
 
@@ -1173,6 +1238,10 @@ In `CHANGELOG.md`, add a new section above the most recent one:
   runs unchanged.
 - Over-capacity scenes drop the most-overlapped labels deterministically until
   the remainder fits overlap-free (was: force-balance with residual overlaps).
+- Leader-line crossings are now **best-effort reduced** rather than hard-guaranteed:
+  v0.2's no-crossing guarantee is traded for the zero-overlap guarantee (the
+  crossing-repair pass runs before the final legalize). Crossings remain no worse
+  than the old force solver on the test fixtures.
 - `force`, `force_point`, `force_pull`, and `max_overlaps` are now **inert** under
   the default solver (it has no force loop and guarantees zero overlap). They
   remain valid attributes and still drive the in-tree `ForceSolver`.
@@ -1214,3 +1283,6 @@ git commit -m "release: v0.3.0 — ProjectionSolver default, zero-overlap, Q dia
 - **The `bounds === nothing` determinism contract** (force solver) is untouched — `ProjectionSolver` always receives a real `Rect2f` from both surfaces, and `ForceSolver` is unchanged.
 - **`label_cost` keyword shape:** note the spec's narrative gave a positional-`offsets` sketch; the implemented signature takes `offsets` as a **keyword** (`label_cost(anchors, sizes; offsets, bounds, …)`) so all call sites — `projection.jl`, `test_cost.jl`, `test_integration.jl` — must use the keyword form. This is the single canonical signature.
 - **`legalize` obstacle handling:** the legalizer is agnostic to labels vs. obstacles; `projection.jl` appends obstacles as fixed pseudo-nodes (anchor = obstacle center, offset = 0, psize = obstacle widths, `fixed = true`) before the call and strips them on writeback. This realizes the spec's "working arrays = [labels; obstacles]".
+- **Threshold ladder (deliberate, three values):** `0.01` px — legalizer convergence / constraint generation (`legalize.jl`); `0.5` px — Q overlap report, drop-loop stop, over-capacity `@warn` (`label_cost`, `projection.jl`). On a feasible scene the legalizer drives penetration below `0.01`, so its returned `residual` is ≈0 — far below the `0.5` report threshold — which is why `q.overlaps == 0` is robust against Float32 writeback noise (noise on px-scale offsets is ~1e-3, nowhere near the 0.49 gap). A `residual` in `(0.01, 0.5]` only arises on a marginal/over-capacity scene at the round cap, and the drop loop correctly treats it as "good enough, stop".
+- **Legalizer is empirical, not a proof.** The per-round single-axis (cheaper-axis) assignment + Dykstra projection + bounds clamp is a relaxation validated to reach zero overlap on the §7c feasible fixtures — it is **not** a proven global QP optimum, and the post-hoc bounds clamp can fail to fully converge on a *pathologically bounds-tight* packing (boxes that fit only in a specific corner arrangement). Such a scene registers as `residual > 0.5` → the drop loop sheds a label. That is acceptable for v1 (the real scan-line VPSC that treats bounds as constraints is the deferred upgrade per the spec's Non-goals). Do not claim "provably zero overlap" anywhere in code comments.
+- **Warm-start no-op preservation** holds only when the supplied `init_state` is separated by `> 0.01 px` (the legalizer threshold). A caller warm-starting from a layout with sub-0.01px touches will see those pairs nudged. The `test_projection_solver` warm-start fixtures are separated by tens of px, well clear of this.

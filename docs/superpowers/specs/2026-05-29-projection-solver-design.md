@@ -15,16 +15,17 @@ The v0.2 default solver (`ForceSolver`) places labels by force-directed iteratio
 The research converged on a single pipeline — not a menu of architectures — that fixes both:
 
 - **Discrete side-selection** (a deterministic greedy search over Imhof slots) chooses the *right side* per label, owning leader quality.
-- **Constraint-projection legalization** (Dykstra cyclic projection) then nudges boxes the minimum distance needed to reach **provably zero overlap**, owning the overlap guarantee.
+- **Constraint-projection legalization** (Dykstra cyclic projection) then nudges boxes the minimum distance needed to reach **zero overlap** (empirically, on feasible scenes — see the legalizer section's honesty note), owning the overlap guarantee.
 
-§7e's three-pipeline comparison on the live solver showed `side-select → legalize` reaching zero overlap on every feasible scene while **halving leader length** versus legalizing the force output (knot: 49.5→26.8; sparse: 37.1→12.9; collinear: 76.1→15.2 px mean leader), with equal-or-better crossing counts. The continuous force loop is *subsumed*: the discrete front-end picks the side, the legalizer guarantees separation, and there is no force balance left to do.
+§7e's three-pipeline comparison on the live solver showed `side-select → legalize` reaching zero overlap on every feasible scene while **halving leader length** versus legalizing the force output (knot: 49.5→26.8; sparse: 37.1→12.9; collinear: 76.1→15.2 px mean leader), with crossings equal-or-better on most fixtures (§7e saw two minor regressions on a tight knot and a dense-collinear case). The continuous force loop is *subsumed*: the discrete front-end picks the side, the legalizer guarantees separation, and there is no force balance left to do.
 
 This design delivers that pipeline as a new `ProjectionSolver <: AbstractClusterSolver` and makes it the **default** for both surfaces (`textrepel!` and `TextRepelAlgorithm`). `ForceSolver` stays in-tree as a fallback and comparison baseline.
 
 ## Goals
 
-- **Zero-overlap guarantee** for all in-bounds, feasible scenes (load-bearing, provided by the legalizer).
-- **Shorter leader lines** than `ForceSolver` on the §7e fixture scenes (quality target, provided by side-selection).
+- **Zero-overlap guarantee** for in-bounds feasible scenes with adequate slack (load-bearing, provided by the legalizer). Pathologically bounds-tight packings (boxes that fit only in a specific corner arrangement) may not fully converge under the Dykstra legalizer's post-hoc bounds clamp and register as over-capacity → a label is dropped; the deferred scan-line VPSC (which treats bounds as constraints) is the upgrade path.
+- **Shorter leader lines** than `ForceSolver` **in aggregate** across the §7e fixture scenes (quality target, provided by side-selection). Per-scene this is not guaranteed — a sparse scene's `force_pull` spring can hug an anchor closer than any discrete Imhof slot — so the target is the aggregate win (§7e measured ~2×).
+- **Crossings reduced, best-effort** (not a hard guarantee). `repair_crossings!` runs before the final `legalize`, whose minimal nudge can re-introduce a crossing; v0.3 trades v0.2's hard no-crossing guarantee for the hard zero-overlap guarantee, keeping crossings no worse than the `ForceSolver` baseline.
 - **Graceful over-capacity dropping**: when a scene cannot fit overlap-free within bounds, drop the most-overlapped labels deterministically and re-legalize until feasible — never silently leave overlaps.
 - **Fully rng-free determinism**: same `(anchors, sizes, params)` → bit-exact same output, holding across BLAS thread counts and Julia patch versions on the same platform. No RNG anywhere in the new pipeline.
 - **No new public attributes.** Every v0.2 caller runs unchanged. The pipeline swap is internal.
@@ -131,9 +132,11 @@ legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f}, psizes::Vector{Vec2f}
 3. **Dykstra cyclic projection** (below) on `xcons`, then on `ycons`, updating centers in place.
 4. Clamp every movable center back inside bounds (`hw[i] ≤ x[i] ≤ W−hw[i]`, likewise y).
 
-After `rounds`, return offsets, the final maximum penetration as `residual` (Float32; `0` on success), and `rounds_used`. **`residual > 0` after the cap is the over-capacity signal** consumed by the drop loop in `projection.jl`.
+After `rounds`, return offsets, the final maximum penetration as `residual` (Float32; ≈0 on success), and `rounds_used`. **`residual > 0.5` (the Q visual-overlap threshold) is the over-capacity signal** consumed by the drop loop in `projection.jl`; a sub-0.5px residual is "good enough" and stops the loop without dropping.
 
-**Dykstra cyclic projection** onto the half-spaces `pos[hi] − pos[lo] ≥ gap`, converging to the minimum-sum-of-squares displacement satisfying all constraints (the same QP VPSC solves) — and crucially *satisfying* the constraints rather than settling at a force balance:
+**Honesty note (not a proof).** The per-round single-axis (cheaper-axis) assignment + Dykstra projection + bounds clamp is a *relaxation* empirically validated to reach zero overlap on the §7c feasible fixtures. It is **not** a proven global QP optimum, and the post-hoc bounds clamp (applied after, not inside, the Dykstra cycle) can fight separation on bounds-tight packings. This is the conscious v1 trade against the deferred real scan-line VPSC.
+
+**Dykstra cyclic projection** onto the half-spaces `pos[hi] − pos[lo] ≥ gap`, converging (for a *fixed* constraint set) to the minimum-sum-of-squares displacement satisfying those constraints — the projection VPSC also performs, though VPSC additionally solves the constraint-ordering globally, which this per-round relaxation does not. Crucially it *satisfies* the constraints rather than settling at a force balance:
 
 ```julia
 function dykstra!(pos::Vector{Float64}, cons, movable::Vector{Bool}; iters = 5000, tol = 1e-3)
@@ -172,7 +175,7 @@ end
 
 **Fixed nodes.** `fixed[i] == true` (pinned labels and obstacle pseudo-nodes — see `projection.jl`) means box `i` does not move: it contributes its half-extents to constraints but receives zero displacement (the `movable` split above). A constraint between two fixed boxes that overlap is unsatisfiable and is left as residual — surfaced as over-capacity. The spike `dykstra!` (which split every violation in half) is the `movable = all-true` special case of this; the prototype's zero-overlap result is preserved for the all-movable scenes it tested.
 
-**`only_move`.** When `only_move == :x`, no `ycons` are generated (and vice-versa for `:y`); separation is attempted only on the permitted axis. Scenes that cannot be separated on the single permitted axis terminate with `residual > 0` → drop. `:both` is the default and the common case.
+**`only_move`.** When `only_move == :x`, no `ycons` are generated (and vice-versa for `:y`); separation is attempted only on the permitted axis. Scenes that cannot be separated on the single permitted axis terminate with `residual > 0.5` → drop. `:both` is the default and the common case.
 
 **Determinism.** Index-ordered pair iteration (`for i in 1:n, j in i+1:n`) builds `cons` in a fixed order; Dykstra sweeps `cons` in that fixed order; no RNG, no float-equality branching beyond the `> ε` penetration test. Float64 internally for projection stability, converted back to `Vec2f` offsets on return.
 
@@ -191,7 +194,7 @@ side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, psizes::Vector{Vec2f
     -> Vector{Vec2f}
 ```
 
-**Candidate slots.** For each label `i`, the candidate offsets are the eight `slot_offset(s, sizes[i], params.point_padding)` for `s in IMHOF_ORDER`, each filtered to those whose padded box lies in bounds (if none fit, keep all eight so the legalizer can rescue it). `only_move` constrains candidates: with `:x`, only slots whose offset has zero y-component (R, L) are eligible (plus the constrained TR fallback); symmetric for `:y`.
+**Candidate slots.** For each label `i`, the candidate offsets are the eight `slot_offset(s, sizes[i], params.point_padding)` for `s in IMHOF_ORDER`, each passed through `_constrain(·, only_move)` and then filtered to those whose padded box lies in bounds (if none fit, keep all eight constrained offsets so the legalizer can rescue it). `_constrain` zeroes the off-axis component (`:x` → `Vec2f(off[1], 0)`, `:y` → `Vec2f(0, off[2])`), so under `:x` the eight slots collapse onto their horizontal projections (the distinct offsets reduce to the R/L family) and the y-component is always locked to 0 — including on the all-out-of-bounds fallback path. This reuses the validated v0.2 axis-lock; it is the same `_constrain` `initial_offsets` applies.
 
 **Seeding.** Initial selection per label = the slot whose offset is nearest the supplied `seed[i]` (the Voronoi-informed `initial_offsets` result), so the v0.2 Voronoi work is the starting point rather than discarded. Pinned labels (`pin_mask[i]`) are fixed at `pinned_offsets[i]` and never refined.
 
@@ -202,7 +205,9 @@ cost(slot) = overlap_count(slot vs. current selection of all others + obstacles)
              + ‖slot offset‖
 ```
 
-where `overlap_count` uses the inline padded-box test (`overlap_push(b1,b2) != 0`, matching the spike). The high `overlap_weight` makes overlap-avoidance lexicographically dominate leader length, with leader length as the tiebreak — exactly the cost that produced the §7e win. Sweeps stop early when a full pass changes no selection (fixpoint). Pinned labels and obstacles participate as fixed boxes in every `overlap_count` but are never moved.
+where `overlap_count` uses the inline padded-box test (`overlap_push(b1,b2) != 0`, matching the spike). The high `overlap_weight` makes overlap-avoidance lexicographically dominate leader length, with leader length as the tiebreak — exactly the cost that produced the §7e win. Sweeps stop early when a full pass changes no selection. Pinned labels and obstacles participate as fixed boxes in every `overlap_count` but are never moved.
+
+Greedy best-response is **not** globally monotone and can 2-cycle (label A re-sides to dodge B, B re-sides to dodge A, repeat), so the early-stop is not guaranteed and a fixpoint may not exist within `passes`. The implementation therefore evaluates a **global cost** (`Σ overlap-pairs·weight + Σ‖offset‖`) after each sweep and returns the **best arrangement seen across all passes**, not the last sweep's. This makes the output insensitive to cycling. The result is not provably optimal — it is a bounded best-response heuristic whose output the legalizer then separates.
 
 **Determinism.** Fixed candidate order (`IMHOF_ORDER`), index-ordered sweeps, strict `<` improvement test (first slot wins ties by IMHOF preference), no RNG.
 
@@ -234,7 +239,8 @@ if init_state === nothing            # FRESH
     repair_crossings!(offsets, anchors, sizes, falses(n), p;
                       min_len = p.min_segment_length, pin_mask)   # discrete swap pass
 else                                  # RELAX / warm-start
-    offsets = copy(init_state)
+    offsets = [_constrain(o, p.only_move) for o in init_state]   # honor only_move
+    pin_mask !== nothing && for i in 1:n; pin_mask[i] && (offsets[i] = pinned_offsets[i]); end
 end
 
 dropped = falses(n)
@@ -247,11 +253,12 @@ while true
                   fixed = pinned-labels ∪ obstacle-pseudo-nodes,
                   only_move = p.only_move)
     offsets = lz.offsets    # written back to active-label slots; dropped slots keep prior offset
-    (lz.residual ≤ ε || count(!, dropped) ≤ 1) && break
-    drop_most_overlapped!(dropped, anchors, offsets, psizes)   # geometric, deterministic
+    (lz.residual ≤ 0.5 || count(!, dropped) ≤ 1) && break
+    idx = drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask)   # geometric, deterministic
+    idx == 0 && break       # nothing eligible to drop (e.g. all survivors pinned) → stop (avoids infinite loop)
 end
 
-if lz.residual > ε
+if lz.residual > 0.5
     @warn "ProjectionSolver: residual overlap after dropping; scene over-capacity for bounds"
 end
 
@@ -260,7 +267,7 @@ stats[] = label_cost(...) merged with (; iter = lz.rounds_used, residual = lz.re
 return (; offsets, dropped, iter = lz.rounds_used, residual = lz.residual)
 ```
 
-- **`drop_most_overlapped!`** — among still-active labels, drop the one whose padded box overlaps the most other active boxes; ties broken by **highest index** (deterministic). The dropped label keeps its last offset but is flagged `dropped` (render-suppressed by the recipe/connectors, exactly as today). Pinned labels are never dropped.
+- **`drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask)`** — among still-active, **non-pinned** labels, drop the one whose padded box overlaps the most other active boxes; ties broken by **highest index** (deterministic). Returns the dropped index, or `0` if nothing was eligible to drop (e.g. every survivor is pinned) — the drop loop breaks on `0` to avoid an infinite loop when the residual lives among pinned/obstacle boxes the solver cannot move. The dropped label keeps its last offset but is flagged `dropped` (render-suppressed by the recipe/connectors, exactly as today). Pinned labels are never dropped. (The 5-arg form supersedes the 4-arg sketch elsewhere in this doc — `pin_mask` is needed to honor "pinned labels are never dropped".)
 - **Obstacles** enter `legalize`/`side_select` as fixed pseudo-nodes carrying their `Rect2f` center and half-extents, with no leader and no eligibility for movement or dropping.
 - **`pinned_offsets`** are held fixed throughout (fixed in side-select, fixed in legalize), satisfying the existing pin contract: pinned boxes still act as obstacles for the rest while their own offset never changes.
 - **`@warn` on residual** mirrors `repair_crossings!`'s cap-out discipline: best-effort with a loud backstop, never silent.
@@ -275,7 +282,7 @@ Unchanged in spirit from v0.2; the new stages inherit the same guards:
 - **Coincident anchors** — Voronoi dedup gives both `nothing` cells → TR seed; side-select + legalize separate them deterministically (legalizer's aligned-pair handling pushes coincident boxes apart along the cheaper axis).
 - **`n = 0`** — short-circuit, empty result.
 - **`n = 1`** — single label, no overlaps, legalizer is a no-op, `dropped = falses(1)`.
-- **Over-capacity** — legalizer caps out with `residual > 0`; drop loop sheds most-overlapped labels until feasible or one label remains; `@warn` if still residual. This is the *only* drop trigger (see Backward compatibility on `max_overlaps`).
+- **Over-capacity** — legalizer caps out with `residual > 0.5`; drop loop sheds most-overlapped labels until feasible, one label remains, or nothing is eligible to drop (all survivors pinned → loop breaks); `@warn` if still residual. This is the *only* drop trigger (see Backward compatibility on `max_overlaps`).
 
 ## Reactivity
 
@@ -284,7 +291,7 @@ The recipe's single `lift` (`src/recipe.jl`) is unchanged in dependency set — 
 ## Backward compatibility
 
 - **No new public attributes.** Every v0.2 `textrepel!` / `TextRepelAlgorithm` call compiles and runs unchanged.
-- **Output offsets WILL differ** from v0.2 (force loop → side-select + legalize). The change is strictly toward better layouts: zero overlap, shorter leaders, equal-or-fewer crossings. This is the same kind of intended-output-change the v0.2 design already established.
+- **Output offsets WILL differ** from v0.2 (force loop → side-select + legalize). The change is toward better layouts: zero overlap (hard), shorter leaders (aggregate), and crossings no worse than the `ForceSolver` baseline (best-effort — the v0.2 hard no-crossing guarantee is relaxed; see Goals). This is the same kind of intended-output-change the v0.2 design already established.
 - **`force`, `force_point`, `force_pull`** become inert under the default solver (no force loop). They remain documented attributes (still consumed by `ForceSolver`, still tracked by the lift) but no longer move labels by default. Documented in the recipe docstring and CHANGELOG.
 - **`max_overlaps` semantics change.** Under `ForceSolver`, `max_overlaps` dropped labels exceeding an overlap-count threshold *during* iteration. `ProjectionSolver` reaches zero overlap whenever feasible, so the only reason to drop is geometric infeasibility — `max_overlaps` no longer drives dropping. The attribute is retained for compatibility and for `ForceSolver`, but is inert under the default solver. `TextRepelAlgorithm`'s existing warn-once guard on misused `max_overlaps` is preserved. Documented as a behavior change.
 - **`solve_stats` return shape** grows from `(iter, residual)` to a NamedTuple with the Q fields. Callers destructuring the two-field tuple positionally must update; this is internal-leaning API (diagnostics) and the canary test is updated alongside.
@@ -293,7 +300,7 @@ The recipe's single `lift` (`src/recipe.jl`) is unchanged in dependency set — 
 ### Release prep
 
 - **Version bump:** `Project.toml` `0.2.0` → `0.3.0`.
-- **CHANGELOG:** new `## [0.3.0]` section: default solver is now `ProjectionSolver` (side-select → legalize); zero-overlap guarantee on feasible scenes; shorter leaders; `force*`/`max_overlaps` inert under the default solver; `solve_stats` returns Q diagnostics.
+- **CHANGELOG:** new `## [0.3.0]` section: default solver is now `ProjectionSolver` (side-select → legalize); zero-overlap guarantee on feasible scenes; shorter leaders; crossings best-effort (v0.2's hard no-crossing guarantee relaxed in favor of zero-overlap); `force*`/`max_overlaps` inert under the default solver; `solve_stats` returns Q diagnostics.
 - **No new dependencies.** `legalize.jl`, `side_select.jl`, `cost.jl` use only GeometryBasics (already a dep). DelaunayTriangulation (v0.2) is reused for seeding.
 - **`[sources]` URL flip** (memory `makietextrepel-release-blockers`, issue #5): unchanged release-blocker, tracked separately.
 
@@ -307,7 +314,7 @@ test/
   test_side_select.jl          — NEW. seeding, greedy fixpoint, pin/obstacle handling, determinism
   test_projection_solver.jl    — NEW. end-to-end solve_cluster: zero overlap, leader ≤ force, drop loop, warm-start
   test_solver.jl               — existing; rebaseline determinism values
-  test_integration.jl          — existing; rebaseline + assert zero-overlap & no-crossing invariants under new default
+  test_integration.jl          — existing; rebaseline + assert zero-overlap (hard) + best-effort crossing guard under new default
   test_annotation_algorithm.jl — existing; update solve_stats shape; keep the dispatch stability canary
 ```
 
@@ -316,24 +323,23 @@ test/
 **`test_cost.jl`** — `label_cost` on hand-built layouts: a known-overlapping pair counts as 1 overlap (and 0 below the 0.5px threshold); `mean_leader` equals the hand-averaged norms with dropped labels excluded; `crossings` matches a hand-constructed crossing fixture (cross-check against `find_crossings` directly).
 
 **`test_legalize.jl`** (the load-bearing guarantee):
-- Feasible scenes (the §7c fixtures: knot clusters r∈{3,8,15,25}, sparse n∈{15,22,30}, collinear) → `residual == 0` after legalize, all pairs separated under the 0.5px Q check.
-- Infeasible/over-capacity scene (more padded box area than bounds) → `residual > 0` at the round cap (over-capacity signal fires).
+- Feasible scenes (the §7c fixtures: knot clusters r∈{3,8,15,25}, sparse n∈{15,22,30}, collinear) → `residual ≤ 0.5` after legalize, all pairs separated under the 0.5px Q check.
+- Infeasible/over-capacity scene (more padded box area than bounds) → `residual > 0.5` at the round cap (over-capacity signal fires).
 - **Fixed nodes:** a pinned/obstacle box does not move (its center is bit-identical pre/post); movable neighbors absorb the full separation.
-- **`only_move = :x`:** y-coordinates of centers are unchanged; separation attempted on x only; a vertically-stacked pair that can't separate on x reports `residual > 0`.
+- **`only_move = :x`:** y-coordinates of centers are unchanged; separation attempted on x only; a vertically-stacked pair that can't separate on x reports `residual > 0.5`.
 - **Minimum displacement:** legalizing an already-separated layout is a no-op (`rounds_used == 0`, offsets bit-identical).
 - Determinism: repeated calls → bit-identical offsets.
 
 **`test_side_select.jl`**:
 - Seeding: with no conflicts, each label keeps the slot nearest its Voronoi seed.
-- Greedy reduces total cost monotonically across sweeps and reaches a fixpoint within `passes`.
-- A two-label head-on conflict resolves to opposite sides (overlap term dominates).
+- A two-label head-on conflict resolves to opposite sides (overlap term dominates). (Do **not** assert per-sweep monotonic cost decrease — greedy best-response is not globally monotone; the function returns best-of-passes.)
 - Pinned labels are never moved; obstacles are avoided (chosen slot does not overlap an obstacle when an alternative exists).
 - `only_move = :x` restricts selections to horizontal slots.
 - Determinism: same inputs → same selections.
 
 **`test_projection_solver.jl`** (end-to-end through `solve_cluster`):
-- On every §7e fixture: zero overlaps (0.5px Q check) **and** `mean_leader ≤` the `ForceSolver` mean_leader on the same scene (the headline quality target).
-- Crossing count ≤ `ForceSolver` on the fixtures.
+- On every §7e fixture: zero overlaps (0.5px Q check, **per scene** — the hard guarantee). The leader-length win is asserted **in aggregate** across the fixtures (`Σ mean_leader_proj ≤ 0.9·Σ mean_leader_force`), not per-scene (a sparse scene's `force_pull` can beat a discrete slot).
+- Crossing count ≤ `ForceSolver` on the fixtures (best-effort regression guard, not a hard guarantee).
 - **Drop loop:** an over-capacity scene ends with `count(dropped) > 0`, the surviving labels overlap-free, and the most-overlapped labels are the ones dropped (deterministic, ties by highest index).
 - **Warm-start:** `init_state !== nothing` skips side-select (offsets stay near the supplied init, only separated) — verify a pre-separated init_state comes back unchanged, and an overlapping init_state comes back separated without re-siding.
 - **Pin contract:** pinned offsets are bit-identical in the output; unpinned labels treat pinned boxes as obstacles.
@@ -346,13 +352,16 @@ Extend the existing v0.2 pipeline-invariant testset so that, under the new defau
 ```julia
 @test all(isfinite, offsets)
 @test all(i -> dropped[i] || within_bounds(offsets[i], params.bounds), eachindex(offsets))
-@test label_cost(px_anchors, offsets, sizes, params.bounds;
+@test label_cost(px_anchors, sizes; offsets, bounds = params.bounds,
                  dropped, box_padding = params.box_padding,
-                 min_segment_length = min_len).overlaps == 0      # zero-overlap guarantee
-@test isempty(find_crossings(connectors))                        # crossing guarantee retained
+                 point_padding = params.point_padding,
+                 min_segment_length = min_len).overlaps == 0      # HARD: zero-overlap guarantee
+# crossings best-effort: no worse than ForceSolver on the same scene
+rf = solve_cluster(ForceSolver(params), px_anchors, sizes, params.bounds)
+@test length(find_crossings(connectors)) ≤ length(find_crossings(force_connectors(rf)))
 ```
 
-The zero-overlap assertion is the new load-bearing behavioral guarantee of v0.3; the no-crossing assertion is inherited from v0.2 and must still hold after the reordered pipeline.
+The zero-overlap assertion is the new load-bearing behavioral guarantee of v0.3. The no-crossing property is **no longer a hard guarantee** (repair precedes the final legalize, which can perturb topology); it is checked as a best-effort regression guard against the `ForceSolver` baseline. If a dense fixture trips it, the documented refinement is a bounded post-legalize repair↔legalize cleanup (see the plan's Task 5 note).
 
 ### Out of scope for CI
 
