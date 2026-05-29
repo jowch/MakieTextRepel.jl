@@ -5,6 +5,21 @@ All notable changes to MakieTextRepel.jl are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-29
+
+The default placement solver is now `ProjectionSolver`: discrete Imhof side-selection → crossing repair → Dykstra constraint-projection legalization. Layouts now have zero box overlap on feasible scenes and substantially shorter leader lines. Existing caller code runs unchanged; output positions differ from v0.2.
+
+### Added
+
+- `ProjectionSolver` (`src/solvers/projection.jl`) — the new default solver for both `textrepel!` and `TextRepelAlgorithm`. Composes three new pure (GeometryBasics-only) layers: `src/side_select.jl` (greedy discrete Imhof-slot refinement), `src/legalize.jl` (Dykstra constraint-projection overlap removal), and `src/cost.jl` (`label_cost`, a read-only placement-quality functional reporting overlaps / mean leader length / crossings).
+- `solve_stats(alg)` now returns the full quality functional `(; iter, residual, overlaps, mean_leader, crossings, dropped)` instead of just `(iter, residual)`.
+
+### Changed
+
+- The default solver guarantees **zero box overlap** on feasible scenes (was: force-balance with residual overlaps). Over-capacity scenes deterministically drop the most-overlapped labels until the remainder fits overlap-free.
+- Leader-line crossings are now **best-effort reduced** rather than hard-guaranteed: v0.2's no-crossing guarantee is traded for the zero-overlap guarantee (the crossing-repair pass runs before the final legalize). Crossings remain no worse than the in-tree `ForceSolver` on the test fixtures.
+- `force`, `force_point`, `force_pull`, and `max_overlaps` are now **inert** under the default solver (it has no force loop and guarantees zero overlap). They remain valid attributes and still drive the retained in-tree `ForceSolver`.
+
 ## [0.2.0] - 2026-05-28
 
 Layouts are now initialized using Imhof-preferred slots within each anchor's Voronoi cell when geometry allows, and a post-solve repair pass eliminates leader-line crossings on the typical inputs we've measured. Existing user code runs unchanged; output positions will differ from v0.1.
