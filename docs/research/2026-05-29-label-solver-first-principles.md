@@ -392,6 +392,44 @@ critical experiment: **prototype the real VPSC QP** (deep-dive #1) and re-run th
 1 is about the *shortcut* failing (the insight — need the real QP — holds), and findings 2–3 are
 method-robust (upper-bound costs; over-capacity is a geometric fact).
 
+## 7c. Deep-dive #1: constraint-projection legalizer VALIDATED (2026-05-29, `<job tmp>/vpsc_legalize.jl`)
+
+Built the real thing §7b said was needed: a **constraint-projection** legalizer (Dykstra cyclic
+projection onto the separation half-spaces — the same minimum-displacement QP VPSC solves, via a
+simpler-to-verify solver; per-axis constraints, cheaper-axis assignment, iterated to zero
+overlap, bounds by clamping). Re-ran the §7b probe with it. The contrast is decisive:
+
+| Scene | force-style projection (§7b) | constraint projection (this) |
+|---|---|---|
+| knots / sparse / collinear | 3–6 residual overlaps (FAILS) | **0 overlap**, leader +≤1%, max disp ≤7 px |
+| uniform n=40 (~41% area) | 19 residual, −16% leader | **0 overlap**, ~0% leader, max disp 11 px |
+| over-capacity uniform n=80 | 111 residual, +153% leader, 287 px disp | 49 residual, +39% leader, 100 px disp |
+
+**Conclusions:**
+1. **The zero-overlap guarantee is real AND essentially free for feasible scenes.** Constraint
+   projection reaches 0 overlap on every fittable scene (all knots, sparse, collinear, uniform up
+   to n=40) at **≤1% leader-length change and ≤11 px max displacement**. Open question #2 is
+   answered: legalization does *not* blow up leaders in the common case — it makes tiny local
+   adjustments to close the overlaps the force solver left.
+2. **Method matters enormously.** Same scenes, same objective: force balance leaves overlaps and
+   (when dense) flings labels; constraint projection guarantees separation cheaply. This confirms
+   §7b finding 1 from the positive side — Architecture A's Phase 3 must be constraint projection,
+   and once it is, it is a high-value, low-cost win.
+3. **Over-capacity still must drop.** uniform n=80 cannot reach 0 even at 400 rounds (49 residual)
+   and inflates leaders +39% when forced — but note it is already far better than the force
+   probe's +153%. Confirms the legalize/drop coupling (idea #5).
+
+**Verdict on Architecture A:** its keystone phase is validated. A VPSC-class legalizer bolted onto
+the current `solve_cluster` output would eliminate the residual overlaps measured in §7a at
+negligible leader cost — the single highest-confidence improvement we have evidence for.
+
+*Caveats:* (a) the legalizer is a VPSC-*equivalent* (Dykstra projection + iterated cheaper-axis
+assignment), not the exact scan-line VPSC — real VPSC would be faster (single QP/axis, O(n log n)
+constraint generation) and no worse on displacement, so the qualitative result is robust/conservative;
+(b) "overlap" = padded-box intersection, so "0 overlap" means ~8 px clear space between every pair;
+(c) leader-mean is near-unchanged partly because the force solver's output was already nearly
+separated — the win is converting "nearly, with 8–31 stragglers" into a *guaranteed* 0 at no cost.
+
 ## 8. Gaps & caveats in this research
 
 - **The leader-routing scout failed three times** (twice on structured-output, once on a
