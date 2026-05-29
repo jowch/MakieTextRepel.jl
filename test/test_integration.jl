@@ -207,3 +207,19 @@ end
                   for i in eachindex(offsets)]
     @test isempty(find_crossings(connectors))   # repair pass doesn't corrupt visible labels
 end
+
+@testset "recipe solve equals a direct solve_cluster call (#12 structural defense)" begin
+    fig = Figure()
+    ax  = Axis(fig[1, 1])
+    pts = [Point2f(1, 1), Point2f(2, 2), Point2f(1.5, 2.5), Point2f(2.2, 1.1)]
+    plt = textrepel!(ax, pts; text = ["alpha", "beta", "gamma", "delta"])
+    Makie.update_state_before_display!(fig)
+
+    anchors = plt.attributes[:computed_anchors][]
+    sizes   = plt.attributes[:computed_sizes][]
+    params  = plt.attributes[:computed_params][]
+    direct  = MakieTextRepel.solve_cluster(MakieTextRepel.ForceSolver(params),
+                                           anchors, sizes, params.bounds)
+    @test plt.attributes[:computed_offsets][] == direct.offsets
+    @test plt.attributes[:computed_dropped][] == direct.dropped
+end
