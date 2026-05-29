@@ -60,11 +60,18 @@ the renderer will use, so the scan and the render agree byte-for-byte.
 Returns the number of outer iterations consumed (0 if no crossings on first scan).
 On cap-out, performs one final rescan and emits a `@warn` listing the residual
 crossings — this is the "best-effort with backstop" signal the spec describes.
-The non-crossing guarantee holds whenever this function returns < `max_iter`.
+The non-crossing guarantee holds whenever this function returns < `max_iter`,
+*except* for crossings that touch a pinned label (via `pin_mask`): those are never
+swapped, so the early no-progress return can leave such pinned crossings in place.
 """
 function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
                            sizes::Vector{Vec2f}, dropped::BitVector,
-                           params; min_len::Real, max_iter::Int = 100)
+                           params; min_len::Real, max_iter::Int = 100,
+                           pin_mask::Union{Nothing,BitVector} = nothing)
+    if pin_mask !== nothing && length(pin_mask) != length(offsets)
+        throw(DimensionMismatch("pin_mask length ($(length(pin_mask))) must match offsets length ($(length(offsets)))"))
+    end
+    is_pinned(k) = pin_mask !== nothing && pin_mask[k]
     for iter in 1:max_iter
         connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
                       for i in eachindex(offsets)]
@@ -74,10 +81,16 @@ function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
         swapped = Set{Int}()
         for (i, j) in crossings
             (i in swapped || j in swapped) && continue
+            (is_pinned(i) || is_pinned(j)) && continue   # never move a pinned label
             swap_positions!(offsets, anchors, i, j)
             push!(swapped, i)
             push!(swapped, j)
         end
+        # All remaining crossings touch a pinned label → no swap is possible.
+        # Return early instead of burning the rest of max_iter (and emitting the
+        # spurious "without convergence" @warn over crossings we are intentionally
+        # leaving in place). The residual is expected, not a failure.
+        isempty(swapped) && return iter
     end
     # Final rescan — distinguishes "capped out and converged on the last swap"
     # from "capped out with crossings still present". Only warn for the latter.

@@ -140,3 +140,51 @@ using MakieTextRepel: repair_crossings!
     @test_logs repair_crossings!(offsets5, anchors, sizes, dropped, params;
                                  max_iter = 0, min_len = 0.5)
 end
+
+@testset "repair_crossings! skips pairs touching a pinned label" begin
+    # Two anchors with offsets that make their leaders cross (label i sits over
+    # anchor j's side and vice versa).
+    anchors = [Point2f(0, 0), Point2f(20, 0)]
+    sizes   = [Vec2f(6, 4), Vec2f(6, 4)]
+    dropped = falses(2)
+    params  = RepelParams(point_padding = 0.0)
+
+    crossed = [Vec2f(20, 10), Vec2f(-20, 10)]   # i reaches right, j reaches left → cross
+
+    # Confirm the leaders really cross before relying on a swap to prove repair ran.
+    conns0 = [MakieTextRepel.connector_for(anchors[i], crossed[i], sizes[i], dropped[i], params, 0.0) for i in 1:2]
+    @test !isempty(MakieTextRepel.find_crossings(conns0))
+
+    # Without pins: the pair gets swapped (offsets change).
+    off_free = copy(crossed)
+    MakieTextRepel.repair_crossings!(off_free, anchors, sizes, dropped, params; min_len = 0.0)
+    @test off_free != crossed
+
+    # Pin label 1: the crossing pair (1,2) touches a pinned label → skipped, nothing moves.
+    off_pin  = copy(crossed)
+    pin_mask = BitVector([true, false])
+    iters_pin = MakieTextRepel.repair_crossings!(off_pin, anchors, sizes, dropped, params;
+                                                 min_len = 0.0, pin_mask = pin_mask)
+    @test off_pin == crossed
+    @test iters_pin < 100        # broke out early instead of burning max_iter (would fail without the break fix)
+end
+
+@testset "repair_crossings! mixed: free pair repaired, pinned pair skipped (spec item 2)" begin
+    # Two INDEPENDENT crossing pairs, 100px apart vertically so they don't cross
+    # each other. Pair (1,2) is fully free → swapped. Pair (3,4) touches pinned
+    # label 3 → skipped (stays crossed).
+    anchors = [Point2f(0, 0),  Point2f(20, 0),
+               Point2f(0, 100), Point2f(20, 100)]
+    sizes   = fill(Vec2f(6, 4), 4)
+    dropped = falses(4)
+    params  = RepelParams(point_padding = 0.0)
+    crossed = [Vec2f(20, 10), Vec2f(-20, 10),     # pair 1-2 crosses near y∈[0,16]
+               Vec2f(20, 10), Vec2f(-20, 10)]     # pair 3-4 crosses near y∈[100,116]
+
+    off = copy(crossed)
+    pin_mask = BitVector([false, false, true, false])   # label 3 pinned
+    MakieTextRepel.repair_crossings!(off, anchors, sizes, dropped, params;
+                                     min_len = 0.0, pin_mask = pin_mask)
+    @test off[1] != crossed[1] && off[2] != crossed[2]   # free pair was swapped
+    @test off[3] == crossed[3] && off[4] == crossed[4]    # pinned pair left untouched
+end
