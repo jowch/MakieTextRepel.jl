@@ -335,8 +335,24 @@ scenario families. Bracketed by two coupling definitions:
 
 **Caveats:** geometric model, approximated label sizes, **TR-only init** (real `init.jl` picks
 best-fit Voronoi+Imhof, which *spreads* initial placement → real init-conflict graph likely
-**even sparser** for the common case). Confirm against live `solve_cluster` (still owed).
+**even sparser** for the common case).
 Script: `<job tmp>/component_density.py`.
+
+**Live confirmation (same day, `<job tmp>/component_live.jl`, real `solve_cluster`).** Ran the
+real `voronoi_cells` + `initial_offsets` + full solve on the same scenarios. Results **confirm
+the first cut** and, as predicted, the real Voronoi+Imhof init is *slightly sparser* than the
+TR-only model:
+- Real-init max component — knots: **4–8**; sparse n≤30: **4–13**; uniform n=40: **6**
+  (all brute-forceable, no ILP). Dense only: uniform n=80 → **62**, n=150 / tight-collinear →
+  one giant. → **Decompose-and-solve-exactly is viable for the common case; ILP fallback needed
+  only in dense regimes.** Open questions #1 and #4 answered.
+- **Bonus finding (supports ranked idea #1).** Post-solve the force loop leaves substantial
+  **residual padded-box overlaps** with `max_overlaps=Inf` dropping nothing: ~8–11 overlapping
+  pairs even on easy knots; 32 pairs / max-residual-component 21 on uniform n=40; 127 on n=80.
+  Direct empirical evidence the current solver **does not guarantee separation** — a VPSC-style
+  legalization pass (idea #1) has concrete, measurable value even on easy scenes. (Caveat:
+  "overlap" here = padded-box intersection, i.e. labels within ~2·box_padding=8px of clear
+  space, so it includes near-touching as well as true glyph overlap.)
 
 ## 8. Gaps & caveats in this research
 
