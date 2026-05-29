@@ -352,16 +352,71 @@ end
 
 using MakieTextRepel: AbstractClusterSolver, ForceSolver, solve_cluster
 
-@testset "ForceSolver wraps solve_repel" begin
-    anchors = [Point2f(0, 0), Point2f(20, 0)]
-    sizes = [Vec2f(6, 4), Vec2f(6, 4)]
-    init = [Vec2f(5, 5), Vec2f(-5, 5)]
-    bounds = Rect2f(-50, -50, 100, 100)
-    params = RepelParams(bounds = bounds)
-    solver = ForceSolver(params)
+@testset "solve_cluster fresh path = voronoi→init→solve→repair (structural defense)" begin
+    # 4 anchors in a row with large boxes: the voronoi-init solve produces a
+    # leader crossing that repair fixes — makes the regression test non-vacuous.
+    anchors = [Point2f(0, 0), Point2f(6, 0), Point2f(12, 0), Point2f(18, 0)]
+    sizes   = [Vec2f(20, 8), Vec2f(20, 8), Vec2f(20, 8), Vec2f(20, 8)]
+    bounds  = Rect2f(-50, -50, 100, 100)
+    params  = RepelParams()
+    solver  = ForceSolver(params)
 
-    o1, d1 = solve_cluster(solver, anchors, sizes, init, bounds)
-    r      = solve_repel(anchors, sizes, params; init_state = init)
-    @test o1 == r.offsets
-    @test d1 == r.dropped
+    # FRESH (init_state === nothing): equals the explicit voronoi→init→solve→repair
+    # pipeline that the recipe used to inline.
+    r = solve_cluster(solver, anchors, sizes, bounds)
+    @test r isa NamedTuple
+    @test propertynames(r) == (:offsets, :dropped, :iter, :residual)
+
+    p     = RepelParams(params; bounds = bounds)
+    cells = MakieTextRepel.voronoi_cells(anchors, bounds)
+    init  = MakieTextRepel.initial_offsets(anchors, sizes, cells, p)
+    manual = solve_repel(anchors, sizes, p; init_state = init)
+    unrepaired = copy(manual.offsets)
+    expected   = copy(manual.offsets)
+    MakieTextRepel.repair_crossings!(expected, anchors, sizes, manual.dropped, p;
+                                     min_len = p.min_segment_length)
+    @test r.offsets == expected
+    @test r.dropped == manual.dropped
+
+    # Non-vacuity: repair actually changed the layout (the unrepaired solve crosses).
+    @test expected != unrepaired
+    # And the seam's output has no leader crossings.
+    conns = [MakieTextRepel.connector_for(anchors[i], r.offsets[i], sizes[i], r.dropped[i], p, p.min_segment_length) for i in eachindex(anchors)]
+    @test isempty(MakieTextRepel.find_crossings(conns))
+end
+
+@testset "solve_cluster relax path skips voronoi + repair" begin
+    # Two leaders that strictly cross (verified geometry from the repair test).
+    anchors = [Point2f(0, 0), Point2f(20, 0)]
+    sizes   = [Vec2f(6, 4), Vec2f(6, 4)]
+    bounds  = Rect2f(-100, -100, 200, 200)
+    p       = RepelParams(point_padding = 0.0)
+    solver  = ForceSolver(p)
+    warm    = [Vec2f(20, 10), Vec2f(-20, 10)]   # crossing warm start
+
+    rr     = solve_cluster(solver, anchors, sizes, bounds; init_state = warm)
+    direct = solve_repel(anchors, sizes, RepelParams(p; bounds = bounds); init_state = warm)
+    # Primary proof: relax output equals a bare solve_repel with the same warm init.
+    # If voronoi re-init ran, the init would differ; if repair ran, it would mutate
+    # (swap) the post-solve offsets — either way rr ≠ direct. Equality ⇒ both skipped.
+    @test rr.offsets == direct.offsets
+    @test rr.dropped == direct.dropped
+end
+
+@testset "solve_cluster forwards obstacles" begin
+    anchors = [Point2f(0, 0)]
+    sizes   = [Vec2f(10, 6)]
+    bounds  = Rect2f(-100, -100, 200, 200)
+    ob      = Rect2f(5, -10, 30, 20)          # obstacle to the right of the anchor
+    solver  = ForceSolver(RepelParams())
+    r = solve_cluster(solver, anchors, sizes, bounds; obstacles = [ob])
+    # The label box must clear the obstacle after solving. The solver works on the
+    # padded box and settles at a force equilibrium, so a sub-pixel residual remains;
+    # without obstacle forwarding the overlap would be ~13 px (the label would sit by
+    # the anchor, deep inside `ob`), so this tolerance check still proves forwarding.
+    box = MakieTextRepel.box_at(anchors[1], r.offsets[1], sizes[1] .+ 2*4.0f0)
+    @test all(abs.(MakieTextRepel.overlap_push(box, ob)) .<= 1.0f0)
+    # The unpadded label box clears the obstacle outright.
+    boxu = MakieTextRepel.box_at(anchors[1], r.offsets[1], sizes[1])
+    @test MakieTextRepel.overlap_push(boxu, ob) == Vec2f(0, 0)
 end

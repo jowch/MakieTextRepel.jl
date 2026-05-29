@@ -83,13 +83,18 @@ function Makie.plot!(p::TextRepel)
                                force_pull = Tuple(Float64.(fpl)),
                                max_iter = Int(mi), only_move = Symbol(om),
                                box_padding = Float64(bp), point_padding = Float64(pp),
-                               max_overlaps = Float64(mo), bounds = bnds)
+                               max_overlaps = Float64(mo), bounds = bnds,
+                               min_segment_length = Float64(ml))
         # `bounds_obs` (lines 69-71) always yields a Rect2f, so `bnds` is never
         # `nothing` on the recipe path — feed it straight through to the pipeline.
-        cells = voronoi_cells(anchors, bnds)
-        init = initial_offsets(anchors, sizes, cells, params)
-        offsets, dropped = solve_cluster(ForceSolver(params), anchors, sizes, init, bnds)
-        repair_crossings!(offsets, anchors, sizes, dropped, params; min_len = Float64(ml))
+        # `bounds = bnds` is set in `params` (above) *and* passed positionally below;
+        # `solve_cluster` overrides params.bounds from the positional arg, so the two
+        # agree. The set in `params` is intentional, not redundant: `params` is exposed
+        # as `computed_params`, and downstream (e.g. the Task 5 byte-identity guard)
+        # reads `computed_params.bounds` to re-derive the same solve — it must be the
+        # real Rect2f, not `nothing`.
+        # Full placement strategy lives in the seam now (voronoi-init + force + repair).
+        offsets, dropped, _, _ = solve_cluster(ForceSolver(params), anchors, sizes, bnds)
         (; anchors, sizes, offsets, dropped, params)
     end
 
