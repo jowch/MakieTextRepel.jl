@@ -34,16 +34,24 @@ textrepel!(ax, pts; text = ["alpha", "beta", "gamma"])
 fig
 ```
 
-Key attributes: `force`, `force_point`, `force_pull` (anisotropic `(x, y)` tuples),
-`only_move` (`:both`/`:x`/`:y`), `max_overlaps` (`Inf` keeps all labels; finite drops
-crowded ones), `background` (boxed labels), `segments`/`segmentcolor`/`linewidth`
-(connectors).
+Key attributes: `only_move` (`:both`/`:x`/`:y`, constrains which axis labels may
+move), `box_padding`/`point_padding` (label / anchor breathing room),
+`min_segment_length` (connector visibility cutoff), `background` (boxed labels),
+`segments`/`segmentcolor`/`linewidth` (connectors). The default solver guarantees
+zero label overlap and automatically drops labels when a scene is over-capacity.
+
+> The force-tuning attributes `force`, `force_point`, `force_pull`, `max_iter`, and
+> `max_overlaps` are **inert under the default `ProjectionSolver`** (it has no force
+> loop and resolves overlaps geometrically); they affect only the non-default in-tree
+> force solver.
 
 ## How it works
 
 Three layers: **measure** (pixel box sizes via TextMeasure.jl; rich text via Makie),
-**solve** (a deterministic force-directed solver in pixel space), **render** (text +
-optional boxes + connectors). Output is deterministic — same data, same figure.
+**solve** (a deterministic, zero-overlap projection solver in pixel space — discrete
+Imhof side-selection → crossing repair → Dykstra constraint-projection legalization),
+**render** (text + optional boxes + connectors). Output is deterministic — same data,
+same figure.
 
 ## Two surfaces
 
@@ -51,9 +59,9 @@ MakieTextRepel exposes two ways to get repelled labels into a plot:
 
 ### `textrepel!`
 
-A standalone Makie recipe with the full feature set: force-directed
-solver, dropping (`max_overlaps`), background boxes, and pixel-space
-connector trimming.
+A standalone Makie recipe with the full feature set: zero-overlap
+projection solver, automatic over-capacity dropping, background boxes,
+and pixel-space connector trimming.
 
 ```julia
 using MakieTextRepel
@@ -67,7 +75,7 @@ adjustText workflow.
 ### `TextRepelAlgorithm`
 
 An algorithm plug-in for `Makie.annotation!`. Reuses the same
-force-directed solver underneath `annotation!`'s styling
+zero-overlap solver underneath `annotation!`'s styling
 (`Ann.Styles.LineArrow()`, custom paths, arrow heads).
 
 ```julia

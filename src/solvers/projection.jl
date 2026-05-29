@@ -66,7 +66,7 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
     p = RepelParams(s.params; bounds = bounds)
     n = length(anchors)
 
-    # Mirror solve_repel's input validation (src/solver.jl). Matters most on the
+    # Mirror solve_repel's input validation (src/force_model.jl). Matters most on the
     # WARM path, where initial_offsets isn't called to catch a mismatch for us.
     if pin_mask !== nothing
         length(pin_mask) == n || throw(DimensionMismatch(

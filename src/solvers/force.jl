@@ -11,7 +11,7 @@ function solve_cluster(s::ForceSolver, anchors::Vector{Point2f}, sizes::Vector{V
                        pin_mask::Union{Nothing,BitVector}        = nothing,
                        pinned_offsets::Vector{Vec2f}             = Vec2f[],
                        obstacles::Vector{Rect2f}                 = Rect2f[])
-    # `RepelParams(base; ...)` (src/solver.jl:25-29) copies s.params, overriding bounds.
+    # `RepelParams(base; ...)` (src/params.jl) copies s.params, overriding bounds.
     p = RepelParams(s.params; bounds = bounds)
     fresh = init_state === nothing
     init = fresh ?

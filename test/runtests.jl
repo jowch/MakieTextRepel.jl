@@ -3,7 +3,7 @@ using Test
 
 @testset "MakieTextRepel.jl" begin
     include("test_geometry.jl")
-    include("test_solver.jl")
+    include("test_force_model.jl")
     include("test_connectors.jl")
     include("test_measure.jl")
     include("test_init.jl")
