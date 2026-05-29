@@ -41,26 +41,32 @@ pipeline**, not a choice between them:
 | Step | What | Confidence | Effort | Determinism |
 |---|---|---|---|---|
 | 1 | **Read-only Q cost functional** reported via `solve_stats` (idea #3) — the measuring stick + introspection seed; commits nothing about the solver | total | low | rng-free |
-| 2 | **VPSC-class constraint-projection legalizer** as a post-`solve_cluster` phase, behind the `bounds !== nothing` opt-in (idea #1) — erases the §7a residual overlaps at ≤1% leader cost | high (prototyped §7c) | medium | rng-free |
+| 2 | **VPSC-class constraint-projection legalizer** as a placement phase, behind the `bounds !== nothing` opt-in (idea #1) — guarantees zero overlap at minimum displacement *from its input* | high (prototyped §7c) | medium | rng-free |
 | 3 | **Priority-aware drop** coupled to legalization (idea #5) — over-capacity scenes can't be legalized in-bounds (§7b/§7d), so drop/shrink lowest-priority instead | high | low | rng-free |
-| 4 | **Discrete side-selection front-end** (B's salvage) — the actual quality lever for wrong-side placement; choose quadrants, then legalize. **Spike before committing** — *heuristic* deterministic side-search is untested (exact was proven to fail) | medium | medium | rng-free |
+| 4 | **Discrete side-selection front-end** (B's salvage) — choose each label's Imhof slot via deterministic greedy/local-search, *then* legalize. **The leader-length win** (§7e: ~50% shorter leaders vs legalizing the force output, equal zero-overlap). Largely subsumes the force loop | **high (validated §7e)** | medium | rng-free |
 
-**Steps 1–3 are a complete, shippable increment** that makes the current output strictly better
-(guaranteed separation, graceful overflow, introspection) with no rearchitecting — de-risked
-enough to take to a spec today. Implementation note for step 2: use the real scan-line VPSC
-(corrected 2007), not the Dykstra stand-in of §7c (the stand-in only proves the result is robust).
-
-**Step 4 is the "great solver" quality jump** but the least de-risked piece — spike a heuristic
-deterministic side-search the way the legalizer was spiked (§7c) before building.
+**The winning pipeline is `discrete side-selection → legalize` (steps 4+2)**, with the read-only Q
+functional (step 1) scoring it and priority-drop (step 3) handling over-capacity. §7e showed the
+legalizer minimizes displacement *from its input*, so the front-end owns leader quality: legalizing
+the *force* output keeps the force solver's long leaders, while side-selection → legalize halves
+them at equal (zero) overlap. This pipeline **largely subsumes the continuous force loop** — discrete
+slot choice + constraint projection replace it, shorter and guaranteed-clean, all rng-free.
+Implementation note for step 2: use the real scan-line VPSC (corrected 2007), not the Dykstra
+stand-in of §7c/§7e (the stand-in only proves the result is robust). Remaining refinement for step 4:
+a crossing-aware side-search (or a retained crossing-repair pass) to fix the two minor crossing
+regressions in §7e.
 
 **Defer:** scene-bitmap awareness (idea #4), temporal coherence (#6), C's full SGD backend (the
 only seeded-not-rng-free piece), and the ILP tier (needed only for rare dense/over-capacity scenes
 that should drop anyway).
 
 **Prior changed by the research:** the discrete optimizer was the expected big lever; the evidence
-says the *legalizer* is the proven win and the discrete layer is a promising-but-unproven
-refinement on top of it. The determinism tension (SA wins but needs RNG) **dissolved** —
-constraint projection and deterministic side-search are both rng-free, so we never need SA.
+refined that to a two-part answer — the *legalizer* (A) guarantees separation, and the *discrete
+side-selection front-end* (B's salvage) owns leader quality (§7e: ~50% shorter leaders). Together
+they form a `side-select → legalize` pipeline that subsumes the continuous force loop. The
+determinism tension (SA wins but needs RNG) **dissolved** — constraint projection and deterministic
+side-search are both rng-free, so we never need SA. **Standalone discrete-exact (B) and standalone
+force (current) are both superseded; standalone C (SGD backend) is deferred.**
 
 ---
 
@@ -514,6 +520,48 @@ discrete model; allowing slot+nudge would make it converge toward A); `within-re
 exactly-solved components (greedy-fallback components' overlaps show only in stitched-global);
 "overlap" = padded-box (8 px clearance). The knot within-resid values are proven optima (all
 knot components solved exactly under the node cap), so the discreteness ceiling is a hard result.
+
+## 7e. Spike: discrete side-selection front-end VALIDATED — the leader-length win (2026-05-29, `<job tmp>/pipeline_compare.jl`)
+
+Compared three pipelines on an aligned Q scorer (overlaps >0.5 px penetration, mean leader length,
+leader crossings), 400 legalize rounds: (1) BASELINE = current `solve_cluster`; (2) FORCE+LEGAL =
+legalize the baseline (A alone); (3) SIDE+LEGAL = greedy deterministic discrete slot search →
+legalize (A + B's front-end).
+
+**Result: both legalized pipelines reach 0 overlap everywhere, but SIDE+LEGAL halves leader
+length in every scenario** at equal overlap and equal-or-better crossings:
+
+| Scene | FORCE+LEGAL lead | SIDE+LEGAL lead | reduction |
+|---|---|---|---|
+| knot r=3 | 49.5 | 26.8 | −46% |
+| knot r=25 | 44.3 | 18.1 | −59% |
+| sparse n=22 | 37.1 | 12.9 | −65% |
+| uniform n=20 | 17.1 | 7.5 | −56% |
+| collinear n=10 | 76.1 | 15.2 | −80% |
+
+(Crossings equal-or-better except two minor regressions: knot r=25 0→2, collinear n=20 5→6.)
+
+**Why — the load-bearing insight:** the legalizer minimizes displacement *from its input*, so it
+**preserves the leader-length character of its starting configuration**. The force solver inflates
+leaders (repulsion flings labels far out) and legalization keeps them there; side-selection places
+each label at its tight preferred Imhof slot and legalization only nudges to clear overlaps. **The
+starting configuration determines final leader length — so the front-end, not the legalizer, owns
+leader quality.**
+
+**Consequences:**
+1. **Step 4 is validated, not a gamble** — discrete side-selection → legalize is a clear, consistent
+   win (~50% shorter leaders, equal zero-overlap).
+2. **Reframes step 2:** merely legalizing the *force* output keeps the long leaders. The leader win
+   requires *replacing* the force front-end with side-selection.
+3. **The winning pipeline `side-select → legalize` largely SUBSUMES the force loop** — no continuous
+   repulsion phase needed; discrete slot choice + constraint projection do the job, shorter and
+   guaranteed-clean.
+
+*Caveats:* the side-selector is a simple deterministic greedy local-search (6 passes) — a better one
+could improve further and likely fix the two crossing regressions (or keep a final crossing-repair
+pass); synthetic data, but the *same* aligned metric scores all three pipelines, so the comparison
+is fair; "leader length" = mean |offset|, and Imhof slots keep labels adjacent-but-not-occluding via
+`point_padding`.
 
 ## 8. Gaps & caveats in this research
 
