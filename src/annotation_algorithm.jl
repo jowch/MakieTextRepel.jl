@@ -9,7 +9,8 @@ export TextRepelAlgorithm, solve_stats
     TextRepelAlgorithm(params::RepelParams; obstacles = Rect2f[])
 
 An algorithm plug-in for `Makie.annotation!`. Uses MakieTextRepel's
-force-directed solver to place non-overlapping labels around data points.
+`ProjectionSolver` (side-select → legalize) to place non-overlapping
+labels around data points.
 
 Supports per-label pinning: set entries of `textpositions_offset` to
 fixed values to lock those labels and let the solver place the rest.
@@ -29,7 +30,8 @@ with `Makie.project`.
 - `bounds`/`max_overlaps` misuse warnings fire once per session (Julia's
   standard logger `maxlog=1` contract), so constructing multiple
   algorithm instances with the same mistake yields one warning total.
-- `solve_stats` returns the iter/residual of the **most recent** solve.
+- `solve_stats` returns the Q diagnostics `(iter, residual, overlaps,
+  mean_leader, crossings, dropped)` of the **most recent** solve.
   A single `TextRepelAlgorithm` instance shared across multiple plots
   reports only the last one to call `calculate_best_offsets!`. Use
   separate instances per plot if you need per-plot diagnostics.
@@ -44,8 +46,7 @@ See also: [`textrepel!`](@ref), [`solve_stats`](@ref).
 struct TextRepelAlgorithm
     params::RepelParams
     obstacles::Vector{Rect2f}
-    last_iter::Base.RefValue{Int}
-    last_residual::Base.RefValue{Float32}
+    solver::ProjectionSolver
 end
 
 function TextRepelAlgorithm(; obstacles::Vector{Rect2f} = Rect2f[],
@@ -63,7 +64,7 @@ function TextRepelAlgorithm(; obstacles::Vector{Rect2f} = Rect2f[],
         @warn "TextRepelAlgorithm: `max_overlaps` has no equivalent under \
             annotation!; use `textrepel!` if you need label dropping." maxlog=1
     end
-    return TextRepelAlgorithm(params, obstacles, Ref(0), Ref(0f0))
+    return TextRepelAlgorithm(params, obstacles, ProjectionSolver(params))
 end
 
 function TextRepelAlgorithm(params::RepelParams;
@@ -72,17 +73,15 @@ function TextRepelAlgorithm(params::RepelParams;
         @warn "TextRepelAlgorithm: `max_overlaps` has no equivalent under \
             annotation!; use `textrepel!` if you need label dropping." maxlog=1
     end
-    return TextRepelAlgorithm(params, obstacles, Ref(0), Ref(0f0))
+    return TextRepelAlgorithm(params, obstacles, ProjectionSolver(params))
 end
 
 """
-    solve_stats(alg::TextRepelAlgorithm) -> (; iter, residual)
+    solve_stats(alg::TextRepelAlgorithm) -> (; iter, residual, overlaps, mean_leader, crossings, dropped)
 
-Return iteration count and final residual from the most recent solve.
-Returns `(iter = 0, residual = 0f0)` before any solve runs.
+Diagnostics from the most recent solve. All zero before any solve runs.
 """
-solve_stats(alg::TextRepelAlgorithm) =
-    (iter = alg.last_iter[], residual = alg.last_residual[])
+solve_stats(alg::TextRepelAlgorithm) = alg.solver.stats[]
 
 function Makie.calculate_best_offsets!(
         alg::TextRepelAlgorithm,
@@ -123,8 +122,8 @@ function Makie.calculate_best_offsets!(
         for i in 1:n
             offsets[i] = T(pinned_render[i][1], pinned_render[i][2])
         end
-        alg.last_iter[] = 0
-        alg.last_residual[] = 0f0
+        alg.solver.stats[] = (; overlaps = 0, mean_leader = 0f0, crossings = 0,
+                                iter = 0, residual = 0f0, dropped = 0)
         return
     end
 
@@ -134,12 +133,6 @@ function Makie.calculate_best_offsets!(
         Float32(bbox.origin[1]),  Float32(bbox.origin[2]),
         Float32(bbox.widths[1]),  Float32(bbox.widths[2]),
     )
-
-    mi = maxiter === Makie.automatic ? alg.params.max_iter : Int(maxiter)
-    # `bounds` is intentionally NOT set here: `solve_cluster` overrides it from its
-    # positional `annotation_bounds` arg below, and nothing reads `effective_params.bounds`
-    # in between. (Unlike the recipe, which exposes its params as `computed_params`.)
-    effective_params = RepelParams(alg.params; max_iter = mi)
 
     # Coordinate translation between solver-space and render-space.
     #
@@ -175,14 +168,11 @@ function Makie.calculate_best_offsets!(
     init_state = reset ? nothing :
                  Vec2f[Vec2f(offsets[i][1], offsets[i][2]) + align_bias[i] for i in 1:n]
 
-    r = solve_cluster(ForceSolver(effective_params), anchors, sizes, annotation_bounds;
+    r = solve_cluster(alg.solver, anchors, sizes, annotation_bounds;
                       init_state     = init_state,
                       pin_mask       = pin_mask,
                       pinned_offsets = pinned_solver,
                       obstacles      = alg.obstacles)
-
-    alg.last_iter[]     = r.iter
-    alg.last_residual[] = r.residual
 
     # Writeback: solver-space → render-space (subtract align_bias). Pinned indices
     # recover pinned_render[i] exactly (solve_cluster holds them at pinned_solver[i]).

@@ -49,7 +49,8 @@ end
     alg = TextRepelAlgorithm()
     s = solve_stats(alg)
     @test s isa NamedTuple
-    @test propertynames(s) == (:iter, :residual)
+    @test Set(propertynames(s)) ==
+          Set((:iter, :residual, :overlaps, :mean_leader, :crossings, :dropped))
     @test s.iter == 0
     @test s.residual === 0f0
 end
@@ -113,7 +114,8 @@ end
         @test offsets[i][1] ≈ 10f0
         @test offsets[i][2] ≈ 20f0
     end
-    @test solve_stats(alg) == (iter = 0, residual = 0f0)
+    @test solve_stats(alg) == (; overlaps = 0, mean_leader = 0f0, crossings = 0,
+                                 iter = 0, residual = 0f0, dropped = 0)
 end
 
 @testset "dispatch — per-label pinning (mixed mode)" begin
@@ -587,6 +589,16 @@ end
     @test true  # If no error, the signature is correct.
 end
 
+using MakieTextRepel: solve_stats
+@testset "solve_stats exposes Q diagnostics after a solve" begin
+    alg = TextRepelAlgorithm()
+    st0 = solve_stats(alg)
+    @test st0.iter == 0 && st0.residual == 0f0
+    @test st0.overlaps == 0 && st0.mean_leader == 0f0 && st0.crossings == 0 && st0.dropped == 0
+    # field set is the v0.3 shape
+    @test Set(keys(st0)) == Set((:iter, :residual, :overlaps, :mean_leader, :crossings, :dropped))
+end
+
 @testset "annotation fresh path produces crossing-free leaders (#12)" begin
     # Invariant: the fresh annotation path reaches solve_cluster, so its leaders are
     # crossing-free. (That repair is *responsible* — vs voronoi-init alone — is proven
@@ -679,5 +691,5 @@ end
         maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
     @test offsets[1] == Vec2f(3, 3)
     @test offsets[2] == Vec2f(3, -4)
-    @test alg.last_iter[] == 0           # bypass: solver never ran
+    @test solve_stats(alg).iter == 0     # bypass: solver never ran
 end
