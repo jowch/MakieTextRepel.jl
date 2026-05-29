@@ -586,3 +586,98 @@ end
         reset = true)
     @test true  # If no error, the signature is correct.
 end
+
+@testset "annotation fresh path produces crossing-free leaders (#12)" begin
+    # Invariant: the fresh annotation path reaches solve_cluster, so its leaders are
+    # crossing-free. (That repair is *responsible* — vs voronoi-init alone — is proven
+    # deterministically at the solve_cluster level in Task 4's fresh-path test; this is
+    # the annotation-surface end-to-end invariant.)
+    anchors = [Point2f(0, 0), Point2f(40, 0), Point2f(0, 40), Point2f(40, 40)]
+    n = length(anchors)
+    bbox = Rect2f(-100, -100, 300, 300)
+    # centered text bbs: origin = anchor - widths/2 → align_bias = 0
+    w = Vec2f(20, 10)
+    text_bbs = [Rect2f(a[1]-w[1]/2, a[2]-w[2]/2, w[1], w[2]) for a in anchors]
+    tpos_off = fill(Point2f(NaN, NaN), n)        # all auto-placed
+    offsets  = fill(Vec2f(0, 0), n)
+
+    alg = TextRepelAlgorithm()
+    Makie.calculate_best_offsets!(alg, offsets, anchors, tpos_off, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # Build leader connectors at the solved positions and assert none cross.
+    sizes = [Vec2f(bb.widths...) for bb in text_bbs]
+    conns = [MakieTextRepel.connector_for(anchors[i], Vec2f(offsets[i]...), sizes[i],
+                                          false, RepelParams(), 0.0) for i in 1:n]
+    @test isempty(MakieTextRepel.find_crossings(conns))
+end
+
+@testset "annotation fresh path is deterministic (#12)" begin
+    anchors = [Point2f(0,0), Point2f(10,0), Point2f(10,0), Point2f(0,10)]  # incl. coincident
+    n = length(anchors)
+    bbox = Rect2f(-100, -100, 300, 300)
+    w = Vec2f(16, 8)
+    text_bbs = [Rect2f(a[1]-w[1]/2, a[2]-w[2]/2, w[1], w[2]) for a in anchors]
+    tpos_off = fill(Point2f(NaN, NaN), n)
+
+    run() = (o = fill(Vec2f(0,0), n);
+             Makie.calculate_best_offsets!(TextRepelAlgorithm(), o, anchors, tpos_off,
+                 text_bbs, bbox; maxiter = Makie.automatic, labelspace = :relative_pixel,
+                 reset = true); o)
+    o1 = run(); o2 = run()
+    @test o1 == o2                       # seeded voronoi → identical across runs
+end
+
+@testset "annotation fresh path separates coincident anchors (#12, spec item 5)" begin
+    # Coincident anchors (2,3) must not collapse onto the same rendered position.
+    anchors = [Point2f(0,0), Point2f(10,0), Point2f(10,0), Point2f(0,10)]
+    n = length(anchors)
+    bbox = Rect2f(-100, -100, 300, 300)
+    w = Vec2f(16, 8)
+    text_bbs = [Rect2f(a[1]-w[1]/2, a[2]-w[2]/2, w[1], w[2]) for a in anchors]
+    tpos_off = fill(Point2f(NaN, NaN), n)
+    o = fill(Vec2f(0,0), n)
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), o, anchors, tpos_off, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+    @test anchors[2] .+ Vec2f(o[2]...) != anchors[3] .+ Vec2f(o[3]...)
+end
+
+@testset "annotation non-centered text places sanely (#12, dismissed Risk 3)" begin
+    # Left/bottom-aligned text: bbox origin AT the anchor → align_bias = widths/2 ≠ 0.
+    anchors = [Point2f(0, 0), Point2f(30, 0), Point2f(0, 30)]
+    n = length(anchors)
+    bbox = Rect2f(-100, -100, 300, 300)
+    w = Vec2f(20, 10)
+    text_bbs = [Rect2f(a[1], a[2], w[1], w[2]) for a in anchors]   # origin = anchor
+    tpos_off = fill(Point2f(NaN, NaN), n)
+    offsets  = fill(Vec2f(0, 0), n)
+
+    alg = TextRepelAlgorithm()
+    Makie.calculate_best_offsets!(alg, offsets, anchors, tpos_off, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+
+    # All offsets finite, and each label is pushed off its own anchor (not collapsed
+    # onto it) — own-anchor repulsion holds regardless of alignment.
+    for i in 1:n
+        @test all(isfinite, offsets[i])
+        rendered_center = anchors[i] .+ Vec2f(offsets[i]...) .+ w ./ 2
+        @test rendered_center != anchors[i]
+    end
+end
+
+@testset "annotation all-pinned bypass preserved (#12)" begin
+    anchors = [Point2f(0,0), Point2f(20,0)]
+    n = length(anchors)
+    bbox = Rect2f(-50,-50,100,100)
+    w = Vec2f(10,6)
+    text_bbs = [Rect2f(a[1]-w[1]/2, a[2]-w[2]/2, w[1], w[2]) for a in anchors]
+    # all finite textpositions_offset → all pinned. Pinned render offset = tpo - anchor.
+    tpos_off = [Point2f(3, 3), Point2f(23, -4)]
+    offsets  = fill(Vec2f(0,0), n)
+    alg = TextRepelAlgorithm()
+    Makie.calculate_best_offsets!(alg, offsets, anchors, tpos_off, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+    @test offsets[1] == Vec2f(3, 3)
+    @test offsets[2] == Vec2f(3, -4)
+    @test alg.last_iter[] == 0           # bypass: solver never ran
+end

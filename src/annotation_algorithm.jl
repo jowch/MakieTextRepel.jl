@@ -136,10 +136,10 @@ function Makie.calculate_best_offsets!(
     )
 
     mi = maxiter === Makie.automatic ? alg.params.max_iter : Int(maxiter)
-    effective_params = RepelParams(alg.params;
-        bounds   = annotation_bounds,
-        max_iter = mi,
-    )
+    # `bounds` is intentionally NOT set here: `solve_cluster` overrides it from its
+    # positional `annotation_bounds` arg below, and nothing reads `effective_params.bounds`
+    # in between. (Unlike the recipe, which exposes its params as `computed_params`.)
+    effective_params = RepelParams(alg.params; max_iter = mi)
 
     # Coordinate translation between solver-space and render-space.
     #
@@ -165,40 +165,32 @@ function Makie.calculate_best_offsets!(
     pinned_solver = Vec2f[pin_mask[i] ? pinned_render[i] + align_bias[i] :
                                         Vec2f(0, 0) for i in 1:n]
 
-    # Initial state for the solver:
-    # - reset=true: fresh start. align_bias places the box at bbox_center;
-    #   golden-angle spiral (same one solve_repel's init_offsets uses) breaks
-    #   ties for coincident anchors so they fan out instead of collapsing.
-    # - reset=false: warm-start from the previous render-space offsets,
-    #   translated to solver-space by adding align_bias.
-    if reset
-        psizes = Vec2f[sizes[i] .+ 2 * Float32(alg.params.box_padding) for i in 1:n]
-        spiral = init_offsets(anchors, psizes, alg.params)
-        init_state = Vec2f[align_bias[i] + spiral[i] for i in 1:n]
-    else
-        init_state = Vec2f[Vec2f(offsets[i][1], offsets[i][2]) + align_bias[i]
-                           for i in 1:n]
-    end
+    # Initial state for the seam:
+    # - reset=true: fresh placement → pass `nothing`; solve_cluster does voronoi-init
+    #   (Imhof slots, in solver-space) + crossing-repair. No align_bias needed on the
+    #   init: the writeback below subtracts align_bias, and rendered box-center =
+    #   anchor + solver_offset for any alignment.
+    # - reset=false: warm-start from the previous render-space offsets, translated to
+    #   solver-space by adding align_bias.
+    init_state = reset ? nothing :
+                 Vec2f[Vec2f(offsets[i][1], offsets[i][2]) + align_bias[i] for i in 1:n]
 
-    result = solve_repel(anchors, sizes, effective_params;
-                         obstacles      = alg.obstacles,
-                         init_state     = init_state,
-                         pin_mask       = pin_mask,
-                         pinned_offsets = pinned_solver)
+    r = solve_cluster(ForceSolver(effective_params), anchors, sizes, annotation_bounds;
+                      init_state     = init_state,
+                      pin_mask       = pin_mask,
+                      pinned_offsets = pinned_solver,
+                      obstacles      = alg.obstacles)
 
-    alg.last_iter[] = result.iter
-    alg.last_residual[] = result.residual
+    alg.last_iter[]     = r.iter
+    alg.last_residual[] = r.residual
 
-    # Writeback: solver-space → render-space. Pinned indices recover
-    # `pinned_render[i]` exactly because Task 5 guarantees
-    # `result.offsets[i] == pinned_solver[i]` for pinned `i`, and
-    # `pinned_solver[i] - align_bias[i] == pinned_render[i]`.
+    # Writeback: solver-space → render-space (subtract align_bias). Pinned indices
+    # recover pinned_render[i] exactly (solve_cluster holds them at pinned_solver[i]).
     for i in 1:n
-        o = result.offsets[i] .- align_bias[i]
+        o = r.offsets[i] .- align_bias[i]
         if all(isfinite, o)
             offsets[i] = T(o[1], o[2])
         else
-            # Solver produced NaN/Inf — fall back to zero offset for this label.
             offsets[i] = T(0, 0)
         end
     end
