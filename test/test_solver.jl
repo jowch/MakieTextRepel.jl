@@ -39,6 +39,14 @@ using LinearAlgebra
     @test norm(init_offsets(zero_anchor, zero_sz, p)[1]) >= 1.0f0 - 1e-4
 end
 
+@testset "RepelParams min_segment_length field" begin
+    @test RepelParams().min_segment_length == 2.0          # default matches recipe attr
+    base = RepelParams()
+    @test RepelParams(base; min_segment_length = 7.0).min_segment_length == 7.0
+    # copy-with-overrides carries the field when overriding something else:
+    @test RepelParams(base; max_iter = 5).min_segment_length == 2.0
+end
+
 @testset "RepelParams copy-with-overrides constructor" begin
     base = RepelParams(force = (2.0, 2.0), max_iter = 100)
     overridden = RepelParams(base; max_iter = 50)
