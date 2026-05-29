@@ -34,3 +34,62 @@ end
     # Scene/MethodError). This also proves the Scene catch-all is gone.
     @test_throws ArgumentError measure_one(:Hello, font, 24.0, 1.0)
 end
+
+@testset "rich-text golden vs old Scene render" begin
+    font = "TeX Gyre Heros Makie"
+
+    # Replicates the pre-#6 Scene algorithm exactly; returns (w, h) in LOGICAL
+    # pixels. Valid only for inputs the old path could render (NOT rich("")).
+    function old_measure(label, fnt, fontsize)
+        sc = Scene(size = (10, 10))
+        t  = text!(sc, Point2f(0, 0); text = label, font = Makie.to_font(fnt),
+                   fontsize = Float32(fontsize))
+        Makie.update_state_before_display!(sc)
+        w = Makie.widths(Makie.full_boundingbox(t, :pixel))
+        return Vec2f(w[1], w[2])
+    end
+
+    # Representative rich-text constructs, measured at ppu = 1.
+    cases = [
+        rich("Hello, world"),                                    # simple
+        rich("H", subscript("2"), "O"),                          # subscript
+        rich("x", superscript("2")),                             # superscript
+        rich("big ", rich("small"; fontsize = 12.0)),            # mixed size
+        rich("plain ", rich("other"; font = "TeX Gyre Heros Makie Bold")),  # mixed font
+        rich("line one\nline two"),                              # multi-line (ppu=1 only)
+        rich(" "),                                               # whitespace-only
+    ]
+    for lbl in cases
+        got  = only(measure_labels([lbl], font, 24.0, 1.0))
+        want = old_measure(lbl, font, 24.0)
+        @test got[1] ≈ want[1] atol = 0.5 rtol = 2e-3
+        @test got[2] ≈ want[2] atol = 0.5 rtol = 2e-3
+    end
+
+    # Heterogeneous vector: each element dispatches independently.
+    hetero = ["Mauna Kea", rich("H", subscript("2"), "O")]
+    sizes  = measure_labels(hetero, font, 24.0, 1.0)
+    for (got, lbl) in zip(sizes, hetero)
+        want = old_measure(lbl, font, 24.0)
+        @test got[1] ≈ want[1] atol = 0.5 rtol = 2e-3
+        @test got[2] ≈ want[2] atol = 0.5 rtol = 2e-3
+    end
+
+    # ppu != 1: single-line rich post-scales exactly. The old :pixel bbox is
+    # ppu-independent, so old_measure(...) .* 2 reproduces the old * ppu, and a
+    # single line has no line-drop term, so the post-scale is exact.
+    # NOTE: multi-line at ppu!=1 is intentionally NOT golden-tested here — the
+    # 20px line-drop stub does not scale with ppu (see spec Known Limitations).
+    sl    = rich("x", superscript("2"))
+    got2  = only(measure_labels([sl], font, 24.0, 2.0))
+    want2 = old_measure(sl, font, 24.0) .* 2.0
+    @test got2[1] ≈ want2[1] atol = 0.5 rtol = 2e-3
+    @test got2[2] ≈ want2[2] atol = 0.5 rtol = 2e-3
+
+    # LaTeXString is an AbstractString → routes to the string path (method 1),
+    # not the throwing catch-all. (Behavior is unchanged from before #6.)
+    lstr  = Makie.LaTeXStrings.LaTeXString("x^2")
+    lsize = only(measure_labels([lstr], font, 24.0, 1.0))
+    @test all(isfinite, lsize)
+    @test lsize[1] > 0 && lsize[2] > 0
+end
