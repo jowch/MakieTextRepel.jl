@@ -430,6 +430,49 @@ constraint generation) and no worse on displacement, so the qualitative result i
 (c) leader-mean is near-unchanged partly because the force solver's output was already nearly
 separated — the win is converting "nearly, with 8–31 stragglers" into a *guaranteed* 0 at no cost.
 
+## 7d. Architecture B pressure-test — standalone B fails (2026-05-29, `<job tmp>/brute_b.jl`)
+
+Branch-and-bound exact solver over in-bounds Imhof slots per component, testing B's three
+premises. **All three break:**
+
+1. **Decomposition dilemma — CONFIRMED.** The *provable-independence* (loose) components —
+   what exact solving actually requires — are large everywhere: knots **10–13**, sparse
+   **13–24**, collinear 10–20, uniform 40–80. Full-slot enumeration is **8^k**, not 2^k:
+   measured `max-combos` up to **5.5e14** (uniform n=80) and **1.7e17** (collinear n=20).
+   B&B prunes small components but fell back to greedy on the large ones. The synthesis's
+   "k≤8 → 256 cases" silently assumed 2 slots/label; with 8 Imhof slots it is intractable, and
+   the valid-independence components do **not** stay small.
+2. **Composition invalidity — CONFIRMED.** Solving the *sparse* init-conflict components
+   independently and stitching leaves **cross-component overlaps**: knots 10–21, uniform n=40
+   → 13, sparse → 3–9. Cleanest case — **sparse n=22: within-component residual = 0 (every
+   component separated perfectly) but stitched-global = 9** overlaps, all cross-component. The
+   sparse graph is not a valid independence relation; independent solving doesn't compose.
+3. **Discreteness ceiling — CONFIRMED, and it's the killer.** Even at the *proven optimum*, the
+   discrete 8-slot model leaves residual overlaps **within** a component: knot r=3 → **18**,
+   r=8 → 9, r=15 → 9, sparse n=30 → 6. On a 3 px-radius knot, **no assignment of the 8 Imhof
+   slots separates the labels** — they are too close and the fixed slots collide.
+
+**Decisive contrast with A on the same tight knots:** A's constraint-projection legalizer
+reached **0 overlap** at ≤1% leader cost (§7c); B's *provably optimal* discrete solve leaves
+**9–18** overlaps. B's "provable optimality" is optimality within a model too weak to solve the
+problem — you prove a placement optimal that still overlaps. Continuous positioning is what
+separates tight clusters; discrete slots cannot.
+
+**Verdict:** **standalone Architecture B is not viable** for our problem — discreteness ceiling +
+decomposition dilemma + composition invalidity. But its genuine contribution survives: discrete
+**side-selection** (which quadrant each label takes) is the right tool for the *discrete*
+sub-problem (wrong-side errors), and belongs as a **front-end phase feeding A's continuous
+legalizer**, not as a standalone solver. This is exactly cross-cutting insight #2
+(discrete-then-continuous) and Architecture A's Phase 1 (discrete seed) + Phase 3 (legalize).
+**The evidence converges on A with a discrete side-selection front-end — i.e., the A/B hybrid —
+not on standalone B.**
+
+*Caveats:* candidates = 8 in-bounds Imhof slots with **no continuous freedom** (that *is* B — a
+discrete model; allowing slot+nudge would make it converge toward A); `within-resid` counts only
+exactly-solved components (greedy-fallback components' overlaps show only in stitched-global);
+"overlap" = padded-box (8 px clearance). The knot within-resid values are proven optima (all
+knot components solved exactly under the node cap), so the discreteness ceiling is a hard result.
+
 ## 8. Gaps & caveats in this research
 
 - **The leader-routing scout failed three times** (twice on structured-output, once on a
