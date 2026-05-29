@@ -109,7 +109,7 @@ Pure, read-only, no mutation, no feedback into placement. Computes three compone
 
 - **`overlaps`** — count of label pairs with penetration `> 0.5` px on both axes, skipping any label flagged in `dropped`. Padded half-extents as above.
 - **`mean_leader`** — mean `‖offset[i]‖` over non-dropped labels (`0f0` if none).
-- **`crossings`** — number of crossing leader pairs, computed by building `Connector`s via the existing `connector_for` (`src/crossings.jl`) and calling the existing `find_crossings`. Reuses v0.2 geometry verbatim; no new crossing math.
+- **`crossings`** — number of crossing leader pairs, computed by building `Connector`s via the existing `connector_for` (`src/connectors.jl`) and calling the existing `find_crossings` (`src/crossings.jl`). Reuses v0.2 geometry verbatim; no new crossing math.
 
 This is the instrument layer (research Architecture C). It exists so callers and tests can *measure* placement quality, and so over-capacity decisions and regression tests have a single source of truth. It does not influence the legalizer or side-selection (those use their own inline overlap checks for speed).
 
@@ -196,7 +196,9 @@ side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, psizes::Vector{Vec2f
 
 **Candidate slots.** For each label `i`, the candidate offsets are the eight `slot_offset(s, sizes[i], params.point_padding)` for `s in IMHOF_ORDER`, each passed through `_constrain(·, only_move)` and then filtered to those whose padded box lies in bounds (if none fit, keep all eight constrained offsets so the legalizer can rescue it). `_constrain` zeroes the off-axis component (`:x` → `Vec2f(off[1], 0)`, `:y` → `Vec2f(0, off[2])`), so under `:x` the eight slots collapse onto their horizontal projections (the distinct offsets reduce to the R/L family) and the y-component is always locked to 0 — including on the all-out-of-bounds fallback path. This reuses the validated v0.2 axis-lock; it is the same `_constrain` `initial_offsets` applies.
 
-**Seeding.** Initial selection per label = the slot whose offset is nearest the supplied `seed[i]` (the Voronoi-informed `initial_offsets` result), so the v0.2 Voronoi work is the starting point rather than discarded. Pinned labels (`pin_mask[i]`) are fixed at `pinned_offsets[i]` and never refined.
+**Seeding.** Initial selection per label = the slot whose offset is nearest the supplied `seed[i]` (the Voronoi-informed `initial_offsets` result), so the v0.2 Voronoi work is the *starting point* rather than discarded. Pinned labels (`pin_mask[i]`) are fixed at `pinned_offsets[i]` and never refined.
+
+Note the seed is only the start: the greedy then minimizes `overlaps·W + ‖offset‖`, which for an unconflicted label collapses to **shortest leader** — so the v0.2 Imhof TR-preference is intentionally *overridden* by leader minimization during refinement (Imhof preference survives only as the starting point and as the iteration-order tiebreak among equal-cost slots). This leader-first behavior is what produced the §7e leader-length win; readability-weighted slot preference is a possible future cost term, deliberately out of scope here.
 
 **Greedy refinement.** Up to `passes` sweeps in index order; in each sweep, for each non-pinned label, choose the candidate slot minimizing
 
@@ -326,12 +328,12 @@ test/
 - Feasible scenes (the §7c fixtures: knot clusters r∈{3,8,15,25}, sparse n∈{15,22,30}, collinear) → `residual ≤ 0.5` after legalize, all pairs separated under the 0.5px Q check.
 - Infeasible/over-capacity scene (more padded box area than bounds) → `residual > 0.5` at the round cap (over-capacity signal fires).
 - **Fixed nodes:** a pinned/obstacle box does not move (its center is bit-identical pre/post); movable neighbors absorb the full separation.
-- **`only_move = :x`:** y-coordinates of centers are unchanged; separation attempted on x only; a vertically-stacked pair that can't separate on x reports `residual > 0.5`.
+- **`only_move = :x`:** y-coordinates of centers are unchanged; separation is attempted on x only. (Note: a vertically-stacked pair with the *same* x-center still separates fine on x — it just slides horizontally — so it reaches `residual ≤ 0.5`. Single-axis over-capacity, `residual > 0.5`, fires only when the boxes' total x-extent exceeds the bounds width under `:x`; use such a width-exceeding scene to exercise the over-capacity path.)
 - **Minimum displacement:** legalizing an already-separated layout is a no-op (`rounds_used == 0`, offsets bit-identical).
 - Determinism: repeated calls → bit-identical offsets.
 
 **`test_side_select.jl`**:
-- Seeding: with no conflicts, each label keeps the slot nearest its Voronoi seed.
+- Unconflicted placement: with no conflicts the cost is pure leader length, so each label lands at its **shortest-leader in-bounds slot** (e.g. `T` for a wider-than-tall label), *not* the Imhof seed — leader minimization overrides the seed.
 - A two-label head-on conflict resolves to opposite sides (overlap term dominates). (Do **not** assert per-sweep monotonic cost decrease — greedy best-response is not globally monotone; the function returns best-of-passes.)
 - Pinned labels are never moved; obstacles are avoided (chosen slot does not overlap an obstacle when an alternative exists).
 - `only_move = :x` restricts selections to horizontal slots.
@@ -358,7 +360,9 @@ Extend the existing v0.2 pipeline-invariant testset so that, under the new defau
                  min_segment_length = min_len).overlaps == 0      # HARD: zero-overlap guarantee
 # crossings best-effort: no worse than ForceSolver on the same scene
 rf = solve_cluster(ForceSolver(params), px_anchors, sizes, params.bounds)
-@test length(find_crossings(connectors)) ≤ length(find_crossings(force_connectors(rf)))
+force_conn = [connector_for(px_anchors[i], rf.offsets[i], sizes[i], rf.dropped[i], params, min_len)
+              for i in eachindex(rf.offsets)]
+@test length(find_crossings(connectors)) ≤ length(find_crossings(force_conn))
 ```
 
 The zero-overlap assertion is the new load-bearing behavioral guarantee of v0.3. The no-crossing property is **no longer a hard guarantee** (repair precedes the final legalize, which can perturb topology); it is checked as a best-effort regression guard against the `ForceSolver` baseline. If a dense fixture trips it, the documented refinement is a bounded post-legalize repair↔legalize cleanup (see the plan's Task 5 note).
