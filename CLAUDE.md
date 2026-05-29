@@ -68,5 +68,5 @@ Three pure layers feed a thin Makie recipe. Keep the layers Makie-free where the
 ## Project state & history
 
 - Design specs and TDD plans live in `docs/superpowers/specs/` and `docs/superpowers/plans/` — read the relevant one before reworking a subsystem.
-- Deferred work is tracked as GitHub issues (#3 glyph-fallback, #4 rounded `cornerradius`, #5 `[sources]` URL flip). v0.2 (Voronoi init + leader-line crossing repair) is specced/planned but paused pending a solver-API spike branch.
+- Deferred work is tracked as GitHub issues (#3 glyph-fallback, #4 rounded `cornerradius`, #5 `[sources]` URL flip). v0.2 (Voronoi-informed init + leader-line crossing repair) has landed (#11 — `src/voronoi.jl`, `src/crossings.jl`).
 - `examples/readme_example.jl` reproduces the README hero image.
