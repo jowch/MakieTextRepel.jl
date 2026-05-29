@@ -237,6 +237,26 @@ Add to `test/test_crossings.jl`. This builds two labels whose leaders cross, the
                                      min_len = 0.0, pin_mask = pin_mask)
     @test off_pin == crossed
 end
+
+@testset "repair_crossings! mixed: free pair repaired, pinned pair skipped (spec item 2)" begin
+    # Two INDEPENDENT crossing pairs, 100px apart vertically so they don't cross
+    # each other. Pair (1,2) is fully free → swapped. Pair (3,4) touches pinned
+    # label 3 → skipped (stays crossed).
+    anchors = [Point2f(0, 0),  Point2f(20, 0),
+               Point2f(0, 100), Point2f(20, 100)]
+    sizes   = fill(Vec2f(6, 4), 4)
+    dropped = falses(4)
+    params  = RepelParams(point_padding = 0.0)
+    crossed = [Vec2f(20, 10), Vec2f(-20, 10),     # pair 1-2 crosses near y∈[0,16]
+               Vec2f(20, 10), Vec2f(-20, 10)]     # pair 3-4 crosses near y∈[100,116]
+
+    off = copy(crossed)
+    pin_mask = BitVector([false, false, true, false])   # label 3 pinned
+    MakieTextRepel.repair_crossings!(off, anchors, sizes, dropped, params;
+                                     min_len = 0.0, pin_mask = pin_mask)
+    @test off[1] != crossed[1] && off[2] != crossed[2]   # free pair was swapped
+    @test off[3] == crossed[3] && off[4] == crossed[4]    # pinned pair left untouched
+end
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -309,7 +329,7 @@ git commit -m "Teach repair_crossings! to skip pinned pairs (#12)"
 Replace the existing `@testset "ForceSolver wraps solve_repel"` block in `test/test_solver.jl` (lines 347-359) with:
 
 ```julia
-@testset "solve_cluster owns the strategy (fresh vs relax)" begin
+@testset "solve_cluster fresh path = voronoi→init→solve→repair (structural defense)" begin
     anchors = [Point2f(0, 0), Point2f(20, 0), Point2f(0, 20)]
     sizes   = [Vec2f(6, 4), Vec2f(6, 4), Vec2f(6, 4)]
     bounds  = Rect2f(-50, -50, 100, 100)
@@ -317,7 +337,7 @@ Replace the existing `@testset "ForceSolver wraps solve_repel"` block in `test/t
     solver  = ForceSolver(params)
 
     # FRESH (init_state === nothing): equals the explicit voronoi→init→solve→repair
-    # pipeline that the recipe used to inline. This is the structural-defense test.
+    # pipeline that the recipe used to inline.
     r = solve_cluster(solver, anchors, sizes, bounds)
     @test r isa NamedTuple
     @test propertynames(r) == (:offsets, :dropped, :iter, :residual)
@@ -326,17 +346,42 @@ Replace the existing `@testset "ForceSolver wraps solve_repel"` block in `test/t
     cells = MakieTextRepel.voronoi_cells(anchors, bounds)
     init  = MakieTextRepel.initial_offsets(anchors, sizes, cells, p)
     manual = solve_repel(anchors, sizes, p; init_state = init)
-    expected = copy(manual.offsets)
+    unrepaired = copy(manual.offsets)
+    expected   = copy(manual.offsets)
     MakieTextRepel.repair_crossings!(expected, anchors, sizes, manual.dropped, p;
                                      min_len = p.min_segment_length)
     @test r.offsets == expected
     @test r.dropped == manual.dropped
+end
+```
 
-    # RELAX (init_state given): solve-only — no voronoi, no repair. Equals a direct
-    # solve_repel with the SAME warm init and aux kwargs.
-    warm = [Vec2f(5, 5), Vec2f(-5, 5), Vec2f(5, -5)]
-    rr   = solve_cluster(solver, anchors, sizes, bounds; init_state = warm)
-    direct = solve_repel(anchors, sizes, p; init_state = warm)
+> **Implementation note (regression strength):** the equality `r.offsets == expected` only
+> proves the fresh path *runs* repair if repair actually changed something — i.e. if
+> `expected != unrepaired`. For the chosen anchors this may be a no-op (a clean layout). To make
+> this a true #12 regression test, pick anchors where the voronoi-init solve produces a crossing
+> and add `@test expected != unrepaired` (repair changed the result) plus a connector check that
+> `r`'s leaders don't cross. Verify the crossing-inducing layout during implementation (e.g. a
+> tight cluster of 4-5 nearly-collinear anchors) — if `expected == unrepaired` for your layout,
+> the test is vacuous. Keep iterating the layout in the REPL until `expected != unrepaired`.
+
+The relax-path test uses a layout whose leaders **cross**, so the surviving crossing proves
+repair was skipped:
+
+```julia
+@testset "solve_cluster relax path skips voronoi + repair" begin
+    # Two leaders that strictly cross (verified geometry from the repair test).
+    anchors = [Point2f(0, 0), Point2f(20, 0)]
+    sizes   = [Vec2f(6, 4), Vec2f(6, 4)]
+    bounds  = Rect2f(-100, -100, 200, 200)
+    p       = RepelParams(point_padding = 0.0)
+    solver  = ForceSolver(p)
+    warm    = [Vec2f(20, 10), Vec2f(-20, 10)]   # crossing warm start
+
+    rr     = solve_cluster(solver, anchors, sizes, bounds; init_state = warm)
+    direct = solve_repel(anchors, sizes, RepelParams(p; bounds = bounds); init_state = warm)
+    # Primary proof: relax output equals a bare solve_repel with the same warm init.
+    # If voronoi re-init ran, the init would differ; if repair ran, it would mutate
+    # (swap) the post-solve offsets — either way rr ≠ direct. Equality ⇒ both skipped.
     @test rr.offsets == direct.offsets
     @test rr.dropped == direct.dropped
 end
@@ -441,7 +486,7 @@ In `src/recipe.jl`, two edits inside the `solved = lift(...)` body.
 LOG="test/output/test-$(whoami)-issue12.log"
 julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee "$LOG"
 grep -E "Test Summary|Fail|Error" "$LOG"
-grep -nA2 "solve_cluster owns the strategy\|forwards obstacles" "$LOG"
+grep -nA2 "solve_cluster fresh path\|relax path skips\|forwards obstacles" "$LOG"
 ```
 Expected: package loads; the two new solver testsets pass; the existing recipe determinism + axis-limit regression tests in `test_integration.jl` still pass (recipe output is byte-identical — same voronoi→init→solve→repair, same `min_len`).
 
@@ -515,9 +560,11 @@ Delete the `psizes`/spiral init block and the direct `solve_repel` call in `calc
 Add to `test/test_annotation_algorithm.jl`. These call the registered hook directly (the file already uses this pattern — see its stability canary). Helper to build inputs for centered text:
 
 ```julia
-@testset "annotation fresh path inherits crossing-free repair (#12)" begin
-    # A layout that, under plain golden-angle init + no repair, produced crossing
-    # leaders. After routing through solve_cluster (voronoi-init + repair) it must not.
+@testset "annotation fresh path produces crossing-free leaders (#12)" begin
+    # Invariant: the fresh annotation path reaches solve_cluster, so its leaders are
+    # crossing-free. (That repair is *responsible* — vs voronoi-init alone — is proven
+    # deterministically at the solve_cluster level in Task 4's fresh-path test; this is
+    # the annotation-surface end-to-end invariant.)
     anchors = [Point2f(0, 0), Point2f(40, 0), Point2f(0, 40), Point2f(40, 40)]
     n = length(anchors)
     bbox = Rect2f(-100, -100, 300, 300)
@@ -552,10 +599,34 @@ end
                  reset = true); o)
     o1 = run(); o2 = run()
     @test o1 == o2                       # seeded voronoi → identical across runs
-    # coincident anchors (2,3) must not collapse onto the same rendered position:
-    @test anchors[2] .+ o1[2] != anchors[3] .+ o1[3]
 end
 
+@testset "annotation fresh path separates coincident anchors (#12, spec item 5)" begin
+    # Coincident anchors (2,3) must not collapse onto the same rendered position.
+    anchors = [Point2f(0,0), Point2f(10,0), Point2f(10,0), Point2f(0,10)]
+    n = length(anchors)
+    bbox = Rect2f(-100, -100, 300, 300)
+    w = Vec2f(16, 8)
+    text_bbs = [Rect2f(a[1]-w[1]/2, a[2]-w[2]/2, w[1], w[2]) for a in anchors]
+    tpos_off = fill(Point2f(NaN, NaN), n)
+    o = fill(Vec2f(0,0), n)
+    Makie.calculate_best_offsets!(TextRepelAlgorithm(), o, anchors, tpos_off, text_bbs, bbox;
+        maxiter = Makie.automatic, labelspace = :relative_pixel, reset = true)
+    @test anchors[2] .+ Vec2f(o[2]...) != anchors[3] .+ Vec2f(o[3]...)
+end
+```
+
+> **Implementation note (lost-tiebreak risk):** this is the spec's tracked risk. Coincident
+> anchors get degenerate (`nothing`) voronoi cells, so `initial_offsets` falls back to the same
+> TR slot for both, and `overlap_push`'s coincident-center fallback pushes them the same
+> direction — they may fail to separate. If this test fails, it is **not** a test bug: implement
+> the spec's minimal fix — a deterministic, index-keyed golden-angle perturbation applied **only**
+> in the `initial_offsets` fallback branch (`cell === nothing`). It MUST keep the recipe
+> byte-identity guard (Task 5) and the existing recipe determinism test green; if the recipe also
+> exercises that fallback, gate the perturbation so recipe output is unchanged. Do not silently
+> weaken this test.
+
+```julia
 @testset "annotation non-centered text places sanely (#12, dismissed Risk 3)" begin
     # Left/bottom-aligned text: bbox origin AT the anchor → align_bias = widths/2 ≠ 0.
     anchors = [Point2f(0, 0), Point2f(30, 0), Point2f(0, 30)]
@@ -602,13 +673,19 @@ end
 ```bash
 LOG="test/output/test-$(whoami)-issue12.log"
 julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee "$LOG"
-grep -nA3 "inherits crossing-free\|is deterministic\|all-pinned bypass preserved" "$LOG"
+grep -nA3 "produces crossing-free\|is deterministic\|separates coincident\|places sanely\|all-pinned bypass preserved" "$LOG"
 ```
 Expected: the crossing-free and determinism testsets FAIL (current annotation path uses spiral init, no repair, so leaders may cross / placement differs). The all-pinned testset should already PASS (bypass exists). This confirms the new behavior is not yet present.
 
 - [ ] **Step 3: Rewrite the solve block in `calculate_best_offsets!`**
 
-In `src/annotation_algorithm.jl`, replace the `init_state` block + `solve_repel` call + diagnostics writeback (current lines 168-190) with:
+In `src/annotation_algorithm.jl`, replace the **entire span from the `# Initial state` comment
+through the final `return`** — current **lines 168-205**: the comment block, the
+`if reset … else … end` `init_state` computation, the `solve_repel(...)` call, the
+`alg.last_iter[]`/`alg.last_residual[]` assignment, **and** the render-space writeback `for`
+loop (which references `result`), and the `return`. Replacing only through line 190 would leave
+the old writeback loop at 192-204 referencing the now-removed `result` → `UndefVarError`.
+Replace all of 168-205 with:
 
 ```julia
     # Initial state for the seam:
@@ -652,7 +729,7 @@ Confirm the now-unused locals are gone: the `psizes`/`spiral`/`if reset … else
 LOG="test/output/test-$(whoami)-issue12.log"
 julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee "$LOG"
 grep -E "Test Summary|Fail|Error" "$LOG"
-grep -nA3 "inherits crossing-free\|is deterministic\|all-pinned bypass preserved" "$LOG"
+grep -nA3 "produces crossing-free\|is deterministic\|separates coincident\|places sanely\|all-pinned bypass preserved" "$LOG"
 ```
 Expected: all three new annotation testsets pass; the existing annotation tests (warm-start, pinning, obstacles, stability canary) still pass.
 
@@ -679,7 +756,7 @@ Expected: zero failures/errors across all 8 test files.
 - [ ] **Step 2: Cross-check the spec test plan**
 
 Confirm each spec test-plan item maps to a test that now exists and passes:
-1. Recipe byte-identity → Task 5 + existing determinism test. 2. Pinning×repair → Tasks 2,3. 3. Relax skips voronoi/repair → Task 4 relax test. 4. Fresh crossing-free → Task 6. 5. Coincident → Task 6 determinism test; non-centered → Task 6 "places sanely" test. 6. Determinism → Task 6. 7. Obstacles through seam → Task 4. 8. All-pinned bypass → Task 6. 9. min_segment_length → Task 1. 10. Seam canary → Task 4. 11. repair_crossings! sig → Task 3. 12. Dispatch canary → unchanged, still in suite.
+1. Recipe byte-identity → Task 5 + existing determinism test. 2. Pinning×repair → Tasks 2,3. 3. Relax skips voronoi/repair → Task 4 relax test. 4. Fresh crossing-free → Task 6. 5. Coincident → Task 6 coincident-separation test; non-centered → Task 6 "places sanely" test. 6. Determinism → Task 6 determinism test. 7. Obstacles through seam → Task 4. 8. All-pinned bypass → Task 6. 9. min_segment_length → Task 1. 10. Seam canary → Task 4. 11. repair_crossings! sig → Task 3. 12. Dispatch canary → unchanged, still in suite.
 
 - [ ] **Step 3: Final commit if any gap-filling test was added**
 
