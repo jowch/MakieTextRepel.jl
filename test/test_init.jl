@@ -142,3 +142,37 @@ using MakieTextRepel: initial_offsets, RepelParams
     # Determinism
     @test initial_offsets(anchors, sizes, cells, params) == initial_offsets(anchors, sizes, cells, params)
 end
+
+@testset "initial_offsets honors pinned indices" begin
+    anchors = [Point2f(0, 0), Point2f(50, 0), Point2f(0, 50)]
+    sizes   = [Vec2f(10, 6), Vec2f(10, 6), Vec2f(10, 6)]
+    cells   = Union{GeometryBasics.Polygon, Nothing}[nothing, nothing, nothing]
+    params  = RepelParams()
+
+    # No pin args → identical to the bare call (byte-identity for the recipe path).
+    base = MakieTextRepel.initial_offsets(anchors, sizes, cells, params)
+    same = MakieTextRepel.initial_offsets(anchors, sizes, cells, params;
+                                          pin_mask = nothing, pinned_offsets = Vec2f[])
+    @test same == base
+
+    # Pin index 2 at a specific offset → that index is seeded there, others unchanged.
+    pin_mask = BitVector([false, true, false])
+    pinned   = [Vec2f(0, 0), Vec2f(99, 99), Vec2f(0, 0)]
+    out = MakieTextRepel.initial_offsets(anchors, sizes, cells, params;
+                                         pin_mask = pin_mask, pinned_offsets = pinned)
+    @test out[2] == Vec2f(99, 99)
+    @test out[1] == base[1]
+    @test out[3] == base[3]
+end
+
+@testset "initial_offsets pinned offset bypasses _constrain (only_move)" begin
+    anchors = [Point2f(0,0), Point2f(50,0)]
+    sizes   = [Vec2f(10,6), Vec2f(10,6)]
+    cells   = Union{GeometryBasics.Polygon, Nothing}[nothing, nothing]
+    params  = RepelParams(only_move = :x)
+    pin_mask = BitVector([false, true])
+    pinned   = [Vec2f(0,0), Vec2f(5, 7)]
+    out = MakieTextRepel.initial_offsets(anchors, sizes, cells, params;
+                                         pin_mask = pin_mask, pinned_offsets = pinned)
+    @test out[2] == Vec2f(5, 7)          # pinned: y survives despite only_move=:x
+end
