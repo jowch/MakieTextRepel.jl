@@ -354,6 +354,44 @@ TR-only model:
   "overlap" here = padded-box intersection, i.e. labels within ~2·box_padding=8px of clear
   space, so it includes near-touching as well as true glyph overlap.)
 
+## 7b. Architecture A pressure-test (2026-05-29, `<job tmp>/component_pressure.jl`)
+
+Stress-tested Architecture A's central risk (open question #2): does a zero-overlap
+**legalization** projection blow up leader length? Probe: take `solve_cluster`'s output, run a
+pure separation projection (only `overlap_push`, full steps to convergence, in-bounds),
+measure leader-length cost. Three findings, the first unexpected:
+
+1. **A force-style projection does NOT guarantee zero overlap.** Even run to convergence with
+   no competing anchor-pull, the separation projection left residual overlaps in nearly every
+   crowded case (knots 3–6, uniform n=40 → 19, n=80 → 111, collinear → 5–10). It hits the
+   *same* force-balance / local-minimum trap as the main solver — a label squeezed between two
+   others receives cancelling pushes and "converges" with overlaps intact. **Implication:
+   Architecture A's Phase 3 legalize CANNOT be a dressed-up force loop — it must be the genuine
+   VPSC active-set constraint QP.** The zero-overlap guarantee is real but is *only* delivered
+   by the actual QP machinery, never by "iterate the separation forces a bit more." This rules
+   out the cheap shortcut and **escalates deep-dive #1 (prototype real VPSC) to the critical
+   path** — we've now empirically shown the easy substitute fails.
+2. **For common scenes, legalization's leader cost is LOW** — open question #2's fear does not
+   materialize. Knots / sparse / moderate: leader-mean change −6% to +8%, max displacement
+   ≤~60 px. Since a force-style projection over-displaces vs the minimum-displacement VPSC QP,
+   these are *pessimistic upper bounds* — real VPSC would be equal or better. Good news for A.
+3. **For over-capacity dense scenes, zero-overlap is physically impossible in-bounds → you must
+   DROP.** Uniform n=80 (80 labels in 380×340) could not be separated: forcing it flung labels
+   a max of **287 px** and inflated mean leader length **+153%**, and *still* left 111 overlaps.
+   This couples legalization to **priority-aware dropping (idea #5)**: you cannot legalize an
+   over-full scene; drop/shrink first, then legalize the remainder. Architecture A needs idea #5
+   baked in, not bolted on.
+
+**Verdict:** Architecture A is not broken, but the pressure-test sharpened its non-negotiables —
+(a) Phase 3 must be true VPSC, not force iteration; (b) it must be coupled with priority-dropping
+for over-capacity scenes; (c) the leader-length risk is low for common scenes and only bites in
+the over-capacity regime, where the correct response is to drop rather than separate. Next
+critical experiment: **prototype the real VPSC QP** (deep-dive #1) and re-run this probe with it.
+
+*Caveat:* the probe's "legalize" is force-style, not the real minimum-displacement VPSC; finding
+1 is about the *shortcut* failing (the insight — need the real QP — holds), and findings 2–3 are
+method-robust (upper-bound costs; over-capacity is a geometric fact).
+
 ## 8. Gaps & caveats in this research
 
 - **The leader-routing scout failed three times** (twice on structured-output, once on a
