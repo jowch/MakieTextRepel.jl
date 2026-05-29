@@ -1,4 +1,4 @@
-# test_solver.jl
+# test_force_model.jl — tests for the force-directed solver (src/force_model.jl)
 using MakieTextRepel: RepelParams, init_offsets, box_at
 using GeometryBasics
 using LinearAlgebra
