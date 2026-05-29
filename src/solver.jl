@@ -13,6 +13,7 @@ Base.@kwdef struct RepelParams
     step_max::Float64               = 10.0          # per-iteration px clamp
     pull_threshold::Float64         = 1.0           # px; suppress spring within this
     tol::Float64                    = 0.1           # convergence: max move < tol
+    min_segment_length::Float64     = 2.0           # px; min visible leader length (connector filter + crossing-repair threshold); matches recipe attr
     bounds::Union{Rect2f, Nothing} = nothing   # clamp region in solver (pixel) space; nothing = no clamp
 end
 

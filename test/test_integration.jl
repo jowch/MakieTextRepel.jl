@@ -207,3 +207,41 @@ end
                   for i in eachindex(offsets)]
     @test isempty(find_crossings(connectors))   # repair pass doesn't corrupt visible labels
 end
+
+@testset "recipe solve equals a direct solve_cluster call (#12 structural defense)" begin
+    fig = Figure()
+    ax  = Axis(fig[1, 1])
+    pts = [Point2f(1, 1), Point2f(2, 2), Point2f(1.5, 2.5), Point2f(2.2, 1.1)]
+    plt = textrepel!(ax, pts; text = ["alpha", "beta", "gamma", "delta"])
+    Makie.update_state_before_display!(fig)
+
+    anchors = plt.attributes[:computed_anchors][]
+    sizes   = plt.attributes[:computed_sizes][]
+    params  = plt.attributes[:computed_params][]
+    direct  = MakieTextRepel.solve_cluster(MakieTextRepel.ForceSolver(params),
+                                           anchors, sizes, params.bounds)
+    @test plt.attributes[:computed_offsets][] == direct.offsets
+    @test plt.attributes[:computed_dropped][] == direct.dropped
+end
+
+@testset "recipe fans out exactly-coincident anchors (#12, intended byte-identity exception)" begin
+    # The coincident golden-angle fan-out in initial_offsets is gated on
+    # `cell === nothing && coord_counts > 1`, NOT on pin_mask — so it fires on the
+    # recipe path too. For EXACTLY coincident anchors the recipe no longer reproduces
+    # the pre-refactor TR-slot collapse; instead both labels are seeded in distinct
+    # directions and separate. This is intended (the spec's coincident-separation
+    # goal), and this test documents/guards it so the byte-identity story is explicit:
+    # byte-identity holds for distinct anchors; exactly-coincident anchors are the
+    # one carved-out exception.
+    fig = Figure()
+    ax  = Axis(fig[1, 1])
+    pts = [Point2f(1, 1), Point2f(1, 1), Point2f(2, 2)]   # 1 and 2 exactly coincident
+    plt = textrepel!(ax, pts; text = ["a", "b", "c"])
+    Makie.update_state_before_display!(fig)
+
+    anchors = plt.attributes[:computed_anchors][]
+    offs    = plt.attributes[:computed_offsets][]
+    # The two coincident anchors must land at distinct rendered positions (fanned),
+    # not collapsed onto the same offset.
+    @test anchors[1] .+ offs[1] != anchors[2] .+ offs[2]
+end

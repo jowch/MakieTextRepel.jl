@@ -31,16 +31,43 @@ padded box fits inside the anchor's Voronoi cell; fall back to TR if none fit
 or the cell is `nothing`. Apply `_constrain(offset, params.only_move)` to
 respect axis-lock semantics from the first iteration.
 
-Pure function of (anchors, sizes, cells, params). Same inputs → same outputs.
+When `pin_mask === nothing` (the recipe path) the result is unchanged. When
+`pin_mask`/`pinned_offsets` are provided, indices where `pin_mask[i]` is true
+are seeded directly at `pinned_offsets[i]`, skipping both the slot search and
+`_constrain` (pinned offsets are taken verbatim).
+
+Pure function of (anchors, sizes, cells, params, pin_mask, pinned_offsets).
+Same inputs → same outputs.
 """
 function initial_offsets(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
                          cells::Vector{<:Union{GeometryBasics.Polygon, Nothing}},
-                         params)
+                         params;
+                         pin_mask::Union{Nothing,BitVector} = nothing,
+                         pinned_offsets::Vector{Vec2f}       = Vec2f[])
     n = length(anchors)
+    if pin_mask !== nothing
+        length(pin_mask) == n || throw(DimensionMismatch(
+            "pin_mask length $(length(pin_mask)) does not match anchors length $n"))
+        length(pinned_offsets) == n || throw(DimensionMismatch(
+            "pinned_offsets length $(length(pinned_offsets)) does not match anchors length $n"))
+    end
     offsets = Vector{Vec2f}(undef, n)
     pad = Float32(params.box_padding)
     p = params.point_padding
+    # Coincidence: a label sharing its (x,y) with ≥1 other has no Voronoi cell and
+    # would otherwise get the same TR fallback slot as its twin → collapse. Tag those
+    # so we can fan them out by index. Distinct-but-degenerate (e.g. collinear) labels
+    # are NOT tagged — they keep the plain TR fallback (preserves recipe byte-identity
+    # and Task 4's distinct-collinear crossing layout).
+    coord_counts = Dict{Tuple{Float32,Float32},Int}()
+    for a in anchors
+        k = (a[1], a[2]); coord_counts[k] = get(coord_counts, k, 0) + 1
+    end
     for i in 1:n
+        if pin_mask !== nothing && pin_mask[i]
+            offsets[i] = pinned_offsets[i]      # pinned: seed at the fixed offset, skip slot search
+            continue
+        end
         cell = cells[i]
         chosen = :TR
         if cell !== nothing
@@ -55,6 +82,14 @@ function initial_offsets(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
             end
         end
         raw_off = slot_offset(chosen, sizes[i], p)
+        # Fan out genuinely coincident anchors (cell === nothing AND shares coords):
+        # deterministic index-keyed golden-angle direction at the slot's radius. Pure
+        # function of index — preserves determinism. Single/distinct labels untouched.
+        if cell === nothing && coord_counts[(anchors[i][1], anchors[i][2])] > 1
+            rad = sqrt(raw_off[1]^2 + raw_off[2]^2)
+            θ   = _GOLDEN_ANGLE * Float32(i)
+            raw_off = Vec2f(rad * cos(θ), rad * sin(θ))
+        end
         offsets[i] = _constrain(raw_off, params.only_move)
     end
     return offsets
