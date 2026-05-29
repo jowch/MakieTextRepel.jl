@@ -229,7 +229,7 @@ end
     anchors = plt.attributes[:computed_anchors][]
     sizes   = plt.attributes[:computed_sizes][]
     params  = plt.attributes[:computed_params][]
-    direct  = MakieTextRepel.solve_cluster(MakieTextRepel.ForceSolver(params),
+    direct  = MakieTextRepel.solve_cluster(MakieTextRepel.ProjectionSolver(params),
                                            anchors, sizes, params.bounds)
     @test plt.attributes[:computed_offsets][] == direct.offsets
     @test plt.attributes[:computed_dropped][] == direct.dropped

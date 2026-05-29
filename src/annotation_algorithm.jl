@@ -30,8 +30,8 @@ with `Makie.project`.
 - `bounds`/`max_overlaps` misuse warnings fire once per session (Julia's
   standard logger `maxlog=1` contract), so constructing multiple
   algorithm instances with the same mistake yields one warning total.
-- `solve_stats` returns the Q diagnostics `(iter, residual, overlaps,
-  mean_leader, crossings, dropped)` of the **most recent** solve.
+- `solve_stats` returns the Q diagnostics `(overlaps, mean_leader,
+  crossings, iter, residual, dropped)` of the **most recent** solve.
   A single `TextRepelAlgorithm` instance shared across multiple plots
   reports only the last one to call `calculate_best_offsets!`. Use
   separate instances per plot if you need per-plot diagnostics.
@@ -77,7 +77,7 @@ function TextRepelAlgorithm(params::RepelParams;
 end
 
 """
-    solve_stats(alg::TextRepelAlgorithm) -> (; iter, residual, overlaps, mean_leader, crossings, dropped)
+    solve_stats(alg::TextRepelAlgorithm) -> (; overlaps, mean_leader, crossings, iter, residual, dropped)
 
 Diagnostics from the most recent solve. All zero before any solve runs.
 """
