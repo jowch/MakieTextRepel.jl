@@ -19,21 +19,35 @@ This work happens in the git worktree at
 
 1. **TextMeasure `[sources]` symlink.** `Project.toml` has
    `TextMeasure = {path = "../TextMeasure.jl"}`. From the worktree that relative
-   path resolves through an existing symlink
-   `.claude/worktrees/TextMeasure.jl -> /home/jonathanchen/projects/TextMeasure.jl`.
-   Verify it before running anything:
+   path resolves through an existing symlink `../TextMeasure.jl` (i.e.
+   `.claude/worktrees/TextMeasure.jl`) → `/home/jonathanchen/projects/TextMeasure.jl`.
+   Verify it before running anything (run from the worktree root):
 
    ```bash
-   ls -la .claude/worktrees/TextMeasure.jl 2>/dev/null || ls -la ../TextMeasure.jl
+   ls -la ../TextMeasure.jl
    ```
    Expected: a symlink pointing at `/home/jonathanchen/projects/TextMeasure.jl`.
    If missing, create it: `ln -s /home/jonathanchen/projects/TextMeasure.jl ../TextMeasure.jl`
 
-2. **Do not let `Pkg.resolve` rewrite `[sources]`.** Per project memory (PR #11),
-   resolving inside a worktree can rewrite the relative `[sources]` path. After
-   any `Pkg.*` run, check `git diff Project.toml` shows no change to the
-   `[sources]` block; if it changed, restore it with
-   `git checkout -- Project.toml`.
+2. **Build the environment once.** The worktree env is not instantiated yet, so
+   the first `Pkg.test()` would fail with "Package Makie … is required but does
+   not seem to be installed." Build it first:
+
+   ```bash
+   julia --project=. -e 'using Pkg; Pkg.instantiate()'
+   git checkout -- Project.toml   # see #3
+   ```
+
+3. **`Pkg.*` rewrites `[sources]` — restore it to keep git clean.** Per project
+   memory (PR #11), any resolve inside a worktree (`Pkg.instantiate`,
+   `Pkg.test`, `Pkg.resolve`) rewrites the relative `[sources]` path — observed:
+   `../TextMeasure.jl` → `../../../../TextMeasure.jl`. The deeper path still
+   resolves to the same real dir (the worktree is four levels deep), so the env
+   and tests work either way — but it dirties `Project.toml`. The task commits
+   below are scoped (`git add src/… test/…`) and never include `Project.toml`,
+   so commits stay clean regardless; but run `git checkout -- Project.toml` after
+   each `Pkg.*` invocation so the Final Verification "`git diff` is empty" check
+   passes.
 
 **Test command used throughout** (run from the worktree root). The suite has no
 per-`@testset` filter and `Pkg.test()` pays precompilation, so run it once per
@@ -55,7 +69,11 @@ grep -nE "measure|Test Summary|Fail|Error|Pass" test/output/test-issue6.log
   and gets deleted.
 - **Modify `test/test_measure.jl`** — add new-behavior tests (Task 1) and a
   golden-equivalence suite with a test-local `old_measure` helper (Task 2). Keep
-  the existing plain-string assertions untouched.
+  the existing plain-string assertions untouched. The existing
+  `rich("H", subscript("2"), "O")` finite/positive assertion is **intentionally
+  retained** as a cheap smoke test; the spec's "upgrade" is satisfied by the
+  Task 2 golden suite, which measures that same construct rigorously rather than
+  editing the old assertion in place.
 
 No other files change. `src/recipe.jl` and `src/annotation_algorithm.jl` are
 unaffected (the recipe calls `measure_labels(…, 1.0)`; the annotation path never
@@ -241,6 +259,8 @@ Append this `@testset` to `test/test_measure.jl`:
     # ppu != 1: single-line rich post-scales exactly. The old :pixel bbox is
     # ppu-independent, so old_measure(...) .* 2 reproduces the old * ppu, and a
     # single line has no line-drop term, so the post-scale is exact.
+    # NOTE: multi-line at ppu!=1 is intentionally NOT golden-tested here — the
+    # 20px line-drop stub does not scale with ppu (see spec Known Limitations).
     sl    = rich("x", superscript("2"))
     got2  = only(measure_labels([sl], font, 24.0, 2.0))
     want2 = old_measure(sl, font, 24.0) .* 2.0
@@ -288,12 +308,13 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ## Final Verification
 
 - [ ] **Full suite green.** Confirm the last `Test Summary` in
-  `test/output/test-issue6.log` shows 0 failures / 0 errors across all eight
-  included test files.
+  `test/output/test-issue6.log` shows 0 failures / 0 errors for the whole
+  `MakieTextRepel.jl` suite.
 - [ ] **No production Scene measurement.** `grep -n "Scene\|full_boundingbox" src/`
   returns nothing (the only matches were in `measure.jl` and are deleted; the
   recipe's `text!`/`boundingbox` overrides are unrelated and remain).
-- [ ] **`[sources]` intact.** `git diff Project.toml` is empty.
+- [ ] **`[sources]` intact.** Run `git checkout -- Project.toml` (the test run
+  rewrites it; see Prerequisites #3), then confirm `git diff Project.toml` is empty.
 - [ ] **Acceptance criteria (issue #6):**
   - Rich-text measured render-free — no `Scene` in `measure_labels` (proxy: the
     `@test_throws ArgumentError` + the `grep` above).
