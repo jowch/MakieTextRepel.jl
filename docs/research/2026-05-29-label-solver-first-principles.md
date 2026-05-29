@@ -22,6 +22,48 @@ This note synthesizes two research passes:
    with the same deep structure (VLSI placement, motion planning, packing, graph
    drawing, deterministic combinatorial methods), followed by a cross-domain synthesis.
 
+## Recommendation (post-pressure-test, 2026-05-29)
+
+The empirical work (§7a–§7d) collapsed the three candidate architectures (§4) into **one
+pipeline**, not a choice between them:
+
+- **A (constraint-projection legalize) is the validated keystone** — the only approach *proven*
+  (§7c) to deliver zero overlap, at ≤1% leader cost.
+- **B is not a standalone solver — it is a front-end.** Standalone discrete-exact fails on all
+  three premises (§7d: discreteness ceiling, decomposition dilemma, composition invalidity). Its
+  salvageable core is discrete *side-selection* (which quadrant each label takes — the right tool
+  for the wrong-side errors that motivated this whole investigation).
+- **C is not a competitor — it is the instrument layer.** Its cost functional Q is the scalar the
+  rest of the pipeline serves and reports; it does not replace A.
+
+**What to build, ordered by how well it is de-risked:**
+
+| Step | What | Confidence | Effort | Determinism |
+|---|---|---|---|---|
+| 1 | **Read-only Q cost functional** reported via `solve_stats` (idea #3) — the measuring stick + introspection seed; commits nothing about the solver | total | low | rng-free |
+| 2 | **VPSC-class constraint-projection legalizer** as a post-`solve_cluster` phase, behind the `bounds !== nothing` opt-in (idea #1) — erases the §7a residual overlaps at ≤1% leader cost | high (prototyped §7c) | medium | rng-free |
+| 3 | **Priority-aware drop** coupled to legalization (idea #5) — over-capacity scenes can't be legalized in-bounds (§7b/§7d), so drop/shrink lowest-priority instead | high | low | rng-free |
+| 4 | **Discrete side-selection front-end** (B's salvage) — the actual quality lever for wrong-side placement; choose quadrants, then legalize. **Spike before committing** — *heuristic* deterministic side-search is untested (exact was proven to fail) | medium | medium | rng-free |
+
+**Steps 1–3 are a complete, shippable increment** that makes the current output strictly better
+(guaranteed separation, graceful overflow, introspection) with no rearchitecting — de-risked
+enough to take to a spec today. Implementation note for step 2: use the real scan-line VPSC
+(corrected 2007), not the Dykstra stand-in of §7c (the stand-in only proves the result is robust).
+
+**Step 4 is the "great solver" quality jump** but the least de-risked piece — spike a heuristic
+deterministic side-search the way the legalizer was spiked (§7c) before building.
+
+**Defer:** scene-bitmap awareness (idea #4), temporal coherence (#6), C's full SGD backend (the
+only seeded-not-rng-free piece), and the ILP tier (needed only for rare dense/over-capacity scenes
+that should drop anyway).
+
+**Prior changed by the research:** the discrete optimizer was the expected big lever; the evidence
+says the *legalizer* is the proven win and the discrete layer is a promising-but-unproven
+refinement on top of it. The determinism tension (SA wins but needs RNG) **dissolved** —
+constraint projection and deterministic side-search are both rng-free, so we never need SA.
+
+---
+
 ## 1. The problem, stated cleanly
 
 Given N anchor points in 2D, each with a text label of known w×h, choose a position
