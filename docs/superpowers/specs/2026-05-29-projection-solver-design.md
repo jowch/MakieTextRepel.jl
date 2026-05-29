@@ -97,9 +97,10 @@ Shared conventions used below (matching the spikes and `RepelParams` defaults):
 ### Q functional (`src/cost.jl`)
 
 ```julia
-label_cost(anchors::Vector{Point2f}, offsets::Vector{Vec2f}, sizes::Vector{Vec2f},
-           bounds::Rect2f; dropped::Union{Nothing,BitVector} = nothing,
-           box_padding::Real, min_segment_length::Real)
+label_cost(anchors::Vector{Point2f}, sizes::Vector{Vec2f};
+           offsets::Vector{Vec2f}, bounds::Rect2f,
+           dropped::Union{Nothing,BitVector} = nothing,
+           box_padding::Real, point_padding::Real = 0.0, min_segment_length::Real)
     -> (; overlaps::Int, mean_leader::Float32, crossings::Int)
 ```
 
