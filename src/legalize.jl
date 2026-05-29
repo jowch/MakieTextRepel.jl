@@ -6,6 +6,12 @@
 # point satisfying them — the QP VPSC solves), clamp to bounds, repeat. Fixed
 # nodes contribute their extents but never move. Caps at `rounds`; a positive
 # returned `residual` means the scene could not be cleared in-bounds (over-capacity).
+#
+# Note on the nested caps (`rounds=400` outer × `iters=5000` inner Dykstra): this is a
+# generous *worst-case* budget, not a typical cost. The inner `tol` early-exit and the
+# outer no-constraint early-break terminate far short of the caps on real label scenes;
+# the caps exist only as a backstop for pathological inputs. A genuinely scalable solver
+# would use corrected-2007 scan-line VPSC instead — consciously deferred (see spec Non-goals).
 
 """
 Dykstra cyclic projection onto separation constraints `pos[hi] - pos[lo] >= gap`.

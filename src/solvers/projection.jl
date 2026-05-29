@@ -2,28 +2,39 @@
 # geometric over-capacity dropping and read-only Q diagnostics. Composes the pure
 # layers; the only AbstractClusterSolver that touches solver-internal types here.
 
+# Concrete shape of the Q-diagnostics tuple. Using a concrete alias (rather than an
+# abstract `NamedTuple`) keeps the `stats` Ref type-stable and enforces the same field
+# set/types at every write site: the constructor below, `solve_cluster`, and the
+# annotation all-pinned bypass. Field order matches those write sites (no conversion).
+const ProjectionStats = NamedTuple{(:overlaps, :mean_leader, :crossings, :iter, :residual, :dropped),
+                                   Tuple{Int, Float32, Int, Int, Float32, Int}}
+
 """
 `ProjectionSolver` carries `RepelParams` and a `stats` Ref holding the last solve's
 Q diagnostics `(overlaps, mean_leader, crossings, iter, residual, dropped)`.
 """
 struct ProjectionSolver <: AbstractClusterSolver
     params::RepelParams
-    stats::Base.RefValue{NamedTuple}
+    stats::Base.RefValue{ProjectionStats}
 end
 
 ProjectionSolver(params::RepelParams) =
-    ProjectionSolver(params, Ref{NamedTuple}((; overlaps = 0, mean_leader = 0f0,
-                                                crossings = 0, iter = 0,
-                                                residual = 0f0, dropped = 0)))
+    ProjectionSolver(params, Ref{ProjectionStats}((; overlaps = 0, mean_leader = 0f0,
+                                                     crossings = 0, iter = 0,
+                                                     residual = 0f0, dropped = 0)))
 
 """
 Mark the still-active, non-pinned label whose padded box overlaps the most other
-active boxes (ties → highest index) as dropped. Returns the dropped index (0 if
-none eligible). Deterministic.
+active boxes **and obstacles** (ties → highest index) as dropped. Counting obstacle
+overlaps matters when a round's residual comes purely from a label-vs-obstacle
+penetration: without it, such a label scores `ov = 0` and the highest-index `ov = 0`
+fallback could drop the wrong label. Returns the dropped index (0 if none eligible).
+Deterministic.
 """
 function drop_most_overlapped!(dropped::BitVector, anchors::Vector{Point2f},
                                offsets::Vector{Vec2f}, psizes::Vector{Vec2f},
-                               pin_mask::Union{Nothing,BitVector})
+                               pin_mask::Union{Nothing,BitVector},
+                               obstacles::Vector{Rect2f} = Rect2f[])
     n = length(offsets)
     bestidx = 0; bestov = -1
     for i in 1:n
@@ -34,6 +45,9 @@ function drop_most_overlapped!(dropped::BitVector, anchors::Vector{Point2f},
         for j in 1:n
             (j == i || dropped[j]) && continue
             (overlap_push(bi, box_at(anchors[j], offsets[j], psizes[j])) != Vec2f(0, 0)) && (ov += 1)
+        end
+        for ob in obstacles
+            (overlap_push(bi, ob) != Vec2f(0, 0)) && (ov += 1)
         end
         if ov > bestov || (ov == bestov && i > bestidx)   # ties → highest index
             bestov = ov; bestidx = i
@@ -116,7 +130,7 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
             offsets[i] = lz.offsets[t]
         end
         (lz.residual ≤ 0.5f0 || count(!, dropped) ≤ 1) && break
-        idx = drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask)
+        idx = drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask, obstacles)
         # idx == 0: no label is *eligible* to drop (all remaining survivors pinned) —
         # distinct from the one-survivor case already caught by `count(!, dropped) ≤ 1`
         # in the break condition above. Stop here; the residual warn below still fires.

@@ -111,6 +111,22 @@ end
     @test dropped[3]
 end
 
+@testset "drop_most_overlapped! counts obstacle overlaps" begin
+    p = RepelParams()
+    # Two labels far apart → zero label↔label overlap. Label 1 sits on an obstacle,
+    # label 2 is clear. Obstacle-counting must drop label 1 (ov=1), NOT the highest
+    # index (label 2, ov=0) that the tie-break fallback would pick if obstacles were ignored.
+    anchors = [Point2f(50, 50), Point2f(300, 300)]
+    sizes   = [Vec2f(20, 20) for _ in 1:2]
+    ps = psz(sizes, p.box_padding)
+    offsets = [Vec2f(0, 0), Vec2f(0, 0)]
+    obstacles = [Rect2f(40, 40, 20, 20)]                 # covers label 1's box
+    dropped = falses(2)
+    idx = drop_most_overlapped!(dropped, anchors, offsets, ps, nothing, obstacles)
+    @test idx == 1
+    @test dropped[1]
+end
+
 @testset "ProjectionSolver: all-pinned input is returned untouched" begin
     p = RepelParams()
     bounds = Rect2f(0, 0, 400, 400)
