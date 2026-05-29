@@ -93,3 +93,20 @@ end
     r2 = legalize(anchors, offsets, psizes, bounds; fixed = falses(8))
     @test r1.offsets == r2.offsets
 end
+
+@testset "legalize confines an out-of-bounds non-overlapping layout" begin
+    bounds = Rect2f(0, 0, 200, 200)
+    anchors = [Point2f(10, 100), Point2f(150, 100)]
+    psizes  = [Vec2f(40, 30), Vec2f(40, 30)]
+    offsets = [Vec2f(-30, 0), Vec2f(0, 0)]            # box 1 origin.x = -40, no overlap with box 2
+    r = legalize(anchors, offsets, psizes, bounds; fixed = falses(2))
+    for i in 1:2
+        c = anchors[i] .+ r.offsets[i]
+        @test c[1] - psizes[i][1]/2 >= -0.5           # left edge inside bounds
+        @test c[1] + psizes[i][1]/2 <= 200 + 0.5      # right edge inside bounds
+        @test c[2] - psizes[i][2]/2 >= -0.5
+        @test c[2] + psizes[i][2]/2 <= 200 + 0.5
+    end
+    @test novl(anchors, r.offsets, psizes) == 0       # still overlap-free
+    @test r.rounds_used == 0                          # top-of-round clamp confines it → breaks at round 1
+end

@@ -73,6 +73,13 @@ function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
 
     rounds_used = rounds
     for r in 1:rounds
+        # Clamp movable nodes into bounds FIRST, so a non-overlapping but
+        # out-of-bounds layout is still confined before the no-constraint break.
+        for i in 1:n
+            movable[i] || continue
+            x[i] = clamp(x[i], xlo_b + hw[i], xhi_b - hw[i])
+            y[i] = clamp(y[i], ylo_b + hh[i], yhi_b - hh[i])
+        end
         xcons = Tuple{Int,Int,Float64}[]
         ycons = Tuple{Int,Int,Float64}[]
         for i in 1:n, j in (i+1):n
@@ -97,11 +104,15 @@ function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
         end
         dykstra!(x, xcons, movable)
         dykstra!(y, ycons, movable)
-        for i in 1:n
-            movable[i] || continue
-            x[i] = clamp(x[i], xlo_b + hw[i], xhi_b - hw[i])
-            y[i] = clamp(y[i], ylo_b + hh[i], yhi_b - hh[i])
-        end
+    end
+    # Final clamp: guarantee in-bounds output even if the loop hit the round cap
+    # right after a dykstra push (the residual below is then measured on the clamped layout).
+    # On an over-capacity (round-cap) scene this clamp may pull a box back into one it had
+    # been separated from; `residual` (measured next) accounts for any overlap it reintroduces.
+    for i in 1:n
+        movable[i] || continue
+        x[i] = clamp(x[i], xlo_b + hw[i], xhi_b - hw[i])
+        y[i] = clamp(y[i], ylo_b + hh[i], yhi_b - hh[i])
     end
 
     # final residual (post-clamp): max >0.01px penetration still present
