@@ -83,7 +83,9 @@ solve_cluster(s::AbstractClusterSolver, anchors, sizes, bounds;
         -> (; offsets, dropped, iter, residual)
 ```
 
-Changes vs. today:
+Changes vs. today (the `src/solvers/abstract.jl` docstring — which currently documents
+`solve_cluster(s, anchors, sizes, initial_offsets, bounds) → (offsets, dropped)` — must be
+updated to this new signature/return as part of the work):
 - `initial_offsets` is **no longer a positional input** — the solver owns init.
 - Return widens from `(offsets, dropped)` to a named tuple adding `iter`/`residual`
   (the annotation path needs these for `alg.last_iter` / `alg.last_residual` diagnostics).
@@ -124,24 +126,63 @@ interaction) and repair.
 
 ### 3. `RepelParams` gains `min_segment_length`
 
-Add a `min_segment_length` field to `RepelParams` (`src/solver.jl`) with a sensible default.
-The copy-with-overrides constructor `RepelParams(base; …)` carries it through. This is the
-single non-trivial widening of an existing pure type; everything else is additive kwargs.
+Add a `min_segment_length::Float64` field to `RepelParams` (`src/solver.jl`) with default
+**`2.0`** — this **must** equal the recipe's `@recipe` `min_segment_length` attribute default
+(`src/recipe.jl:31`), or recipe output changes. The `@kwdef`-based copy-with-overrides
+constructor `RepelParams(base; …)` carries it through automatically (it enumerates
+`fieldnames` dynamically), so all existing construction sites are keyword-only and safe — none
+are positional (verified across `src/` and `test/`).
+
+**Scope of "single source of truth":** the field is the strategy's notion of minimum meaningful
+leader length, consumed by `repair_crossings!` **inside** `solve_cluster`. It does **not**
+change connector *rendering*:
+
+- `build_connectors` / `connector_for` (`src/connectors.jl`) keep their existing positional
+  `min_len::Real` argument. The recipe still passes `Float64(ml)` to `build_connectors`
+  (`src/recipe.jl:131-134`) from the same attribute — so the repair threshold (via `params`)
+  and the connector-suppression threshold (via the explicit arg) read the **same value** and
+  stay consistent, but the connector path is not refactored.
+- The annotation surface has no connectors of its own (`annotation!` draws them via
+  `Ann.Styles`), so for that surface `min_segment_length` affects only crossing-repair. Because
+  `TextRepelAlgorithm`'s kwarg constructor validates against `fieldnames(RepelParams)`
+  (`src/annotation_algorithm.jl:51-67`), adding the field automatically lets annotation users
+  pass `min_segment_length = …`; it will tune repair only. This is acceptable and intended.
 
 ### 4. Call sites collapse to the seam
 
-**`src/recipe.jl:89-92`** → one call (fresh, no pins, no obstacles):
+**`src/recipe.jl`.** Only the four-line `init + solve_cluster + repair` block
+(`recipe.jl:89-92`) collapses. The surrounding `lift` body is **unchanged**: it still measures
+sizes, builds `params`, and **must still return the same local named tuple**
+`(; anchors, sizes, offsets, dropped, params)` (`recipe.jl:93`) that five downstream `lift`s
+and four `add_input!`s consume (`s.anchors`, `s.sizes`, `s.params`, `s.dropped`). The collapse is:
 
 ```julia
+# recipe.jl:81-86 — add min_segment_length to the existing kwarg block (no other change):
+params = RepelParams(; force = …, …, max_overlaps = Float64(mo), bounds = bnds,
+                       min_segment_length = Float64(ml))
+# recipe.jl:89-92 — four lines become one; rest of the lift body is untouched:
 offsets, dropped, _, _ = solve_cluster(ForceSolver(params), anchors, sizes, bnds)
+(; anchors, sizes, offsets, dropped, params)   # unchanged downstream contract
 ```
 
-with `params.min_segment_length` set from the recipe's `min_segment_length` attribute when the
-`RepelParams` is built (recipe.jl:81-86). This output **must be byte-identical** to today.
+Notes:
+- `bnds` is passed both inside `params` (line 86, as today) and as the positional `bounds` to
+  `solve_cluster`, which re-overrides with the **same value**. This double-set is pre-existing
+  (today's `solve_cluster` does `RepelParams(s.params; bounds=bounds)` too) and harmless; kept
+  as-is for byte-identity rather than touching the param block.
+- `min_segment_length = Float64(ml)` makes the repair threshold inside `solve_cluster` equal
+  today's `Float64(ml)` exactly. `build_connectors` (line 131-134) keeps reading `ml` directly,
+  so connector suppression is unchanged.
+- This output **must be byte-identical** to today (guarded — see Test plan).
 
-**`src/annotation_algorithm.jl`** → deletes the `if reset … psizes/spiral/align_bias+spiral`
-block (lines 174-181) and the direct `solve_repel` call. Keeps: the all-pinned bypass, the
-`align_bias` add-in / subtract-out translation, and `pinned_solver`. Becomes roughly:
+**`src/annotation_algorithm.jl`** → deletes the `init_state` computation block **and** the
+direct `solve_repel` call (the full span `lines 174-187`: the `if reset … else … end` at
+174-181 *and* the `solve_repel(…)` call at 183-187). This also removes the current
+`psizes = sizes .+ 2*box_padding` line (175), which is a pre-existing **double-padding bug** —
+`init_offsets`/`initial_offsets` pad internally from `params.box_padding`, so feeding
+pre-padded sizes padded twice; routing through `solve_cluster` (raw `sizes`) fixes it. Keeps:
+the all-pinned bypass, the `align_bias` add-in / subtract-out translation, `pinned_solver`, and
+`annotation_bounds` (which retains the `bbox` origin — anchors are in that same frame). Becomes:
 
 ```julia
 init_state = reset ? nothing : Vec2f[offsets[i] + align_bias[i] for i in 1:n]
@@ -153,7 +194,9 @@ alg.last_residual[] = r.residual
 # writeback unchanged: offsets[i] = r.offsets[i] - align_bias[i]
 ```
 
-The annotation path inherits Voronoi-init + crossing-repair on `reset=true` for free.
+`effective_params` already carries `bounds = annotation_bounds` and `max_iter = mi`;
+`solve_cluster` re-overrides `bounds` with the same value (harmless, as above). The annotation
+path inherits Voronoi-init + crossing-repair on `reset=true` for free.
 
 ## Coordinate-space boundary
 
@@ -164,6 +207,29 @@ On the fresh path the caller no longer adds `align_bias` to the init (it passes 
 because the solver computes the Voronoi init in solver-space itself; the writeback still
 subtracts `align_bias`, which is correct. The recipe needs no translation (pixel-space,
 centered text).
+
+### Why dropping the fresh-path `align_bias` init-bias is correct for non-centered text
+
+A design review raised a concern that, for non-centered (aligned) text where `align_bias ≠ 0`,
+not biasing the fresh init by `align_bias` would make the spring pull labels to the wrong
+equilibrium (rendered offset `−align_bias`). Investigated and **dismissed**, on two verified
+code facts:
+
+1. **Labels are repelled off their own anchor** (`solver.jl:154-159`): the force loop includes
+   each label's own anchor ("keeps isolated labels off their own point"), balanced by the weak,
+   thresholded `force_pull` spring. So a label does **not** converge to `offset ≈ 0`; the
+   concern's premise (convergence to zero) does not hold.
+2. **The writeback is alignment-independent.** With `align_bias = o_bb + w/2 − anchor` and
+   `render_offset = solver_offset − align_bias`, the rendered box center is
+   `o_bb + render_offset + w/2 = anchor + solver_offset` for **any** alignment. The solver
+   reasons purely about box centers; `align_bias` only converts box-center ↔ box-origin at the
+   boundary.
+
+Imhof slots are already box-center offsets (`init.jl:7`, `slot_offset`), so the Voronoi init is
+in solver-space directly and needs no `align_bias`. The real effect of the change is that the
+fresh annotation path adopts Imhof-slot placement (like the recipe) instead of the old
+spiral-from-bias — **the intended behavior change of #12**, not a regression. Test plan item 5
+guards that non-centered fresh placement is sane.
 
 ## What stays per-surface (irreducible adapters)
 
@@ -197,22 +263,41 @@ translation.
 
 ## Test plan
 
-1. **Recipe byte-identity** — recipe offsets/dropped unchanged vs. a captured baseline;
-   recipe output equals a direct `solve_cluster(ForceSolver(params), …)` call.
-2. **Pinning × repair** — a pinned label that a swap *would* relocate stays exactly at its
-   pinned offset through a fresh solve that triggers repair on the surrounding free labels.
-3. **Relax path** — `reset=false` runs solve-only: no Voronoi cells computed, no repair; a
-   already-settled, crossing-free warm input is preserved (no swap flicker).
+1. **Recipe byte-identity** — recipe offsets/dropped unchanged vs. a captured baseline; and the
+   recipe's `lift` output equals a direct `solve_cluster(ForceSolver(params), anchors, sizes, bnds)`
+   call (structural defense against future inline leaks).
+2. **Pinning × repair (mixed)** — with 2 of N labels pinned on a **fresh** solve, pinned labels
+   stay exactly at their pinned offset through a repair that would otherwise swap them; free
+   labels still get repaired. Exercises `initial_offsets` pin-seeding + `solve_repel` pin-hold +
+   `repair_crossings!` pin-skip composing in the mixed case.
+3. **Relax path skips voronoi + repair** — assert the `reset=false` output is **identical** to
+   `solve_repel(anchors, sizes, p; init_state = warm_init, obstacles, pin_mask, pinned_offsets)`
+   with the **same** auxiliary kwargs as the `solve_cluster` call (not an empty/no-kwarg call —
+   that would pass trivially). Equality to this matched direct `solve_repel` is the mechanism
+   proving voronoi/repair were bypassed (either would perturb it). Also: an already-settled
+   crossing-free warm input is preserved (no swap flicker).
 4. **Annotation fresh path is crossing-free** — the #12 acceptance test: `reset=true` over a
    layout that previously produced crossing leaders now produces none.
-5. **Coincident anchors, fresh annotation path** — the lost golden-angle-spiral tiebreak risk:
-   coincident anchors still separate (relying on the solver's `overlap_push`), labels do not
-   collapse onto one another.
-6. **Seam contract canary** — update `test_solver.jl`'s `AbstractClusterSolver` /
-   `ForceSolver` contract test for the new signature and return shape.
-7. **`RepelParams.min_segment_length`** — default present; recipe wires its attribute into the
-   field; copy-with-overrides carries it.
-8. **Annotation dispatch stability canary** (`test_annotation_algorithm.jl`) — still passes.
+5. **Coincident anchors + non-centered text, fresh annotation path** — the lost spiral-tiebreak
+   risk: coincident anchors still separate (relying on `overlap_push`), labels do not collapse;
+   and a non-centered (aligned) label renders sanely (guards the dismissed Risk 3).
+6. **Annotation fresh-path determinism** — same inputs over repeated `reset=true` calls give
+   byte-identical offsets (voronoi uses a seeded RNG; separate from item 4 — a layout can be
+   crossing-free yet non-deterministic).
+7. **`obstacles` forwarded through `solve_cluster`** — unit test: `solve_cluster(…; obstacles=[ob])`
+   asserts the label avoids `ob`. Existing obstacle tests bypass the seam, so this path is
+   currently untested.
+8. **All-pinned bypass preserved** — annotation all-pinned early return unchanged:
+   `solve_cluster` never called, offsets pass through verbatim, diagnostics zeroed.
+9. **`RepelParams.min_segment_length`** — default is exactly `2.0` (matches recipe attr
+   `recipe.jl:31`); recipe wires `Float64(ml)` into the field; copy-with-overrides carries it; a
+   `TextRepelAlgorithm(; min_segment_length=…)` kwarg is accepted (auto-validated).
+10. **Seam contract canary** — update `test_solver.jl`'s `ForceSolver wraps solve_repel` testset
+    (`:355`) for the new signature/return: `o1, d1 = …` destructure breaks, arg order changes,
+    `init` positional removed.
+11. **`repair_crossings!` signature** — `pin_mask` added optional (`=nothing`), `min_len` stays
+    required → existing `test_crossings.jl` callers compile unchanged.
+12. **Annotation dispatch stability canary** (`test_annotation_algorithm.jl`) — still passes.
 
 ## Risks
 
@@ -220,7 +305,17 @@ translation.
   fresh annotation path, the follow-up is to add a deterministic golden-angle perturbation to
   the Imhof fallback inside `initial_offsets` — but that would also change recipe output, so it
   must be done carefully behind the same byte-identity guard.
-- **`RepelParams` field addition** touches every `RepelParams` constructor call site; the
-  copy-with-overrides constructor and any positional construction must be audited.
-- **Return-shape change** of `solve_cluster` ripples to its one current caller (recipe) and its
-  contract test; both are updated here.
+- **`min_segment_length` default mismatch** is the sharpest byte-identity hazard: the new
+  `RepelParams` default and the recipe attribute default must both be `2.0`, and the recipe must
+  actually wire `Float64(ml)` into the field. Guarded by tests 1 and 9.
+- **`solve_cluster` signature change** (drops the `initial_offsets` positional, reorders to
+  `bounds`-positional + kwargs, widens to a named-tuple return) ripples to its one src caller
+  (recipe) and its test (`test_solver.jl:355`); both updated here. No other src/test/examples
+  callers exist (verified).
+- **Recipe `lift` body must keep returning `(; anchors, sizes, offsets, dropped, params)`** —
+  `solve_cluster` returns only `(; offsets, dropped, iter, residual)`, so the surrounding tuple
+  is reassembled in the `lift`, not taken from the call. Downstream `lift`s/`add_input!`s depend
+  on it.
+- **Pre-existing double-padding bug** in the annotation reset path (`psizes` fed to a
+  self-padding init) is removed by this refactor; watch for a placement-spread shift in any
+  annotation snapshot baselines.
