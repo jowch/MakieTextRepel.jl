@@ -71,7 +71,6 @@ function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
     if pin_mask !== nothing && length(pin_mask) != length(offsets)
         throw(DimensionMismatch("pin_mask length ($(length(pin_mask))) must match offsets length ($(length(offsets)))"))
     end
-    is_pinned(k) = pin_mask !== nothing && pin_mask[k]
     for iter in 1:max_iter
         connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
                       for i in eachindex(offsets)]
@@ -81,7 +80,7 @@ function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
         swapped = Set{Int}()
         for (i, j) in crossings
             (i in swapped || j in swapped) && continue
-            (is_pinned(i) || is_pinned(j)) && continue   # never move a pinned label
+            pin_mask !== nothing && (pin_mask[i] || pin_mask[j]) && continue   # never move a pinned label
             swap_positions!(offsets, anchors, i, j)
             push!(swapped, i)
             push!(swapped, j)

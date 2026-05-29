@@ -393,12 +393,20 @@ end
     p       = RepelParams(point_padding = 0.0)
     solver  = ForceSolver(p)
     warm    = [Vec2f(20, 10), Vec2f(-20, 10)]   # crossing warm start
+    # A real obstacle overlapping label 1's warm box, forwarded to BOTH calls. This
+    # hardens the test: if solve_cluster dropped `obstacles` on the relax path, rr
+    # would lack the obstacle push that `direct` has and the equality would fail —
+    # so the assertion now also guards obstacle forwarding through the relax path,
+    # not just a match on shared defaults.
+    obs = Rect2f[Rect2f(20, 10, 20, 20)]
 
-    rr     = solve_cluster(solver, anchors, sizes, bounds; init_state = warm)
-    direct = solve_repel(anchors, sizes, RepelParams(p; bounds = bounds); init_state = warm)
-    # Primary proof: relax output equals a bare solve_repel with the same warm init.
-    # If voronoi re-init ran, the init would differ; if repair ran, it would mutate
-    # (swap) the post-solve offsets — either way rr ≠ direct. Equality ⇒ both skipped.
+    rr     = solve_cluster(solver, anchors, sizes, bounds; init_state = warm, obstacles = obs)
+    direct = solve_repel(anchors, sizes, RepelParams(p; bounds = bounds);
+                         init_state = warm, obstacles = obs)
+    # Primary proof: relax output equals a bare solve_repel with the same warm init
+    # and obstacles. If voronoi re-init ran, the init would differ; if repair ran, it
+    # would mutate (swap) the post-solve offsets — either way rr ≠ direct. Equality ⇒
+    # both skipped (and obstacles forwarded identically).
     @test rr.offsets == direct.offsets
     @test rr.dropped == direct.dropped
 end
