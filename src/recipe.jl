@@ -5,11 +5,11 @@
     text = nothing
 
     # ── Physics (pixel space, anisotropic) ──
-    "Label↔label repulsion strength (x, y)."
+    "Label↔label repulsion strength (x, y). Inert under the default ProjectionSolver (no force loop / zero-overlap guarantee); affects only the in-tree ForceSolver."
     force = (1.0, 1.0)
-    "Label↔data-point repulsion strength (x, y)."
+    "Label↔data-point repulsion strength (x, y). Inert under the default ProjectionSolver (no force loop / zero-overlap guarantee); affects only the in-tree ForceSolver."
     force_point = (1.0, 1.0)
-    "Spring pull back to the anchor (x, y)."
+    "Spring pull back to the anchor (x, y). Inert under the default ProjectionSolver (no force loop / zero-overlap guarantee); affects only the in-tree ForceSolver."
     force_pull = (0.01, 0.01)
     "Maximum solver iterations."
     max_iter = 2000
@@ -21,7 +21,7 @@
     box_padding = 4.0
     "Pixel halo around each data point — used both by the solver (repulsion halo) and by the connector layer (gap between the marker and the start of the leader line)."
     point_padding = 2.0
-    "Drop labels overlapping more than this many others (Inf = keep all)."
+    "Drop labels overlapping more than this many others (Inf = keep all). Inert under the default ProjectionSolver (no force loop / zero-overlap guarantee); affects only the in-tree ForceSolver."
     max_overlaps = Inf
 
     # ── Connector segments ──
@@ -93,8 +93,9 @@ function Makie.plot!(p::TextRepel)
         # as `computed_params`, and downstream (e.g. the Task 5 byte-identity guard)
         # reads `computed_params.bounds` to re-derive the same solve — it must be the
         # real Rect2f, not `nothing`.
-        # Full placement strategy lives in the seam now (voronoi-init + force + repair).
-        offsets, dropped, _, _ = solve_cluster(ForceSolver(params), anchors, sizes, bnds)
+        # Full placement strategy lives in the seam now (voronoi-seed → side-select →
+        # crossing-repair → constraint-projection legalize).
+        offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds)
         (; anchors, sizes, offsets, dropped, params)
     end
 

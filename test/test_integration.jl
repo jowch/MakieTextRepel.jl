@@ -130,7 +130,7 @@ end
     end
 end
 
-using MakieTextRepel: connector_for, find_crossings
+using MakieTextRepel: connector_for, find_crossings, label_cost, solve_cluster, ForceSolver
 
 within_bounds(pos::Point2f, vp::Rect2f) =
     vp.origin[1] <= pos[1] <= vp.origin[1] + vp.widths[1] &&
@@ -173,7 +173,18 @@ within_bounds(pos::Point2f, vp::Rect2f) =
             vp = params.bounds
             @test all(isfinite, offsets)
             @test all(i -> dropped[i] || within_bounds(anchors[i] + offsets[i], vp), eachindex(offsets))
-            @test isempty(find_crossings(connectors))
+            # v0.3 HARD guarantee: zero box overlap under ProjectionSolver.
+            q = label_cost(anchors, sizes; offsets = offsets, bounds = vp, dropped = dropped,
+                           box_padding = params.box_padding,
+                           point_padding = params.point_padding,
+                           min_segment_length = min_len)
+            @test q.overlaps == 0
+            # Crossings are best-effort in v0.3 (repair precedes the final legalize):
+            # assert no worse than the ForceSolver baseline on the same scene.
+            rf = solve_cluster(ForceSolver(params), anchors, sizes, vp)
+            force_conn = [connector_for(anchors[i], rf.offsets[i], sizes[i], rf.dropped[i], params, min_len)
+                          for i in eachindex(rf.offsets)]
+            @test length(find_crossings(connectors)) ≤ length(find_crossings(force_conn))
         end
     end
 end
@@ -218,7 +229,7 @@ end
     anchors = plt.attributes[:computed_anchors][]
     sizes   = plt.attributes[:computed_sizes][]
     params  = plt.attributes[:computed_params][]
-    direct  = MakieTextRepel.solve_cluster(MakieTextRepel.ForceSolver(params),
+    direct  = MakieTextRepel.solve_cluster(MakieTextRepel.ProjectionSolver(params),
                                            anchors, sizes, params.bounds)
     @test plt.attributes[:computed_offsets][] == direct.offsets
     @test plt.attributes[:computed_dropped][] == direct.dropped
