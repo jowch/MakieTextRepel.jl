@@ -93,8 +93,9 @@ function Makie.plot!(p::TextRepel)
         # as `computed_params`, and downstream (e.g. the Task 5 byte-identity guard)
         # reads `computed_params.bounds` to re-derive the same solve — it must be the
         # real Rect2f, not `nothing`.
-        # Full placement strategy lives in the seam now (voronoi-init + force + repair).
-        offsets, dropped, _, _ = solve_cluster(ForceSolver(params), anchors, sizes, bnds)
+        # Full placement strategy lives in the seam now (voronoi-seed → side-select →
+        # crossing-repair → constraint-projection legalize).
+        offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds)
         (; anchors, sizes, offsets, dropped, params)
     end
 
