@@ -2,7 +2,7 @@
 # Plain strings (and LaTeXString) go through the layout engine; rich text
 # (Makie.RichText) through measure_bounds. No Scene/render is allocated.
 
-"""Resolve a Makie font attribute to something TextMeasure/`text_bb` accept."""
+"""Resolve a Makie font attribute to a font object TextMeasure accepts."""
 _resolve_font(f) = Makie.to_font(f)
 _resolve_font(f::Symbol) = Makie.to_font(String(f))
 
