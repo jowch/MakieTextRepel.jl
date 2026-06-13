@@ -50,6 +50,20 @@ user-facing breaking changes** to report.
   **best-effort**: it runs before the final legalize, which can re-introduce a
   crossing (crossings remain no worse than the in-tree `ForceSolver` on the
   fixtures).
+- **Marker-clearance floor — point-aware legalization (#21).** The default solver now
+  treats every data anchor as a fixed keep-out of radius `point_padding`, so a label's
+  text never sits under its own or a neighbour's scatter marker — enforced *after*
+  legalization (not just at side-selection, which an earlier legalize pass could undo).
+  Implemented as a `soft` node class in `legalize` (keep-outs push labels but are
+  excluded from the over-capacity drop decision), so **marker clearance never drops a
+  label**. `point_padding` is now the honest marker-clearance knob (default **5 px** on
+  the `textrepel!` and `TextRepelAlgorithm` surfaces — clears Makie's default
+  `markersize = 9`; the `RepelParams` primitive stays **0 px**, where it doubles as the
+  in-tree force solver's point-repulsion halo).
+- `markersize` (recipe convenience attribute) — declare your sibling `scatter!` marker
+  size and `point_padding` is derived as `markersize/2 + 0.5`. `textrepel!` draws no
+  markers itself; this only tells the solver how much to clear (assumes a disc marker
+  in `markerspace = :pixel`; set `point_padding` directly for other markers).
 
 #### Annotation plug-in
 
@@ -81,7 +95,9 @@ user-facing breaking changes** to report.
   and connector children.
 - Tunable attributes: `force`, `force_point`, `force_pull` (anisotropic `(x, y)`
   tuples), `only_move` (`:both`/`:x`/`:y`), `max_iter`, `max_overlaps`,
-  `box_padding` (default 4 px), `point_padding` (default 2 px),
+  `box_padding` (default 4 px), `point_padding` (marker clearance; default 5 px on the
+  `textrepel!`/`TextRepelAlgorithm` surfaces, 0 px on the `RepelParams` primitive),
+  `markersize` (recipe convenience; derives `point_padding`),
   `min_segment_length` (default 2 px), plus connector and background styling.
   **Note:** `force`, `force_point`, `force_pull`, `max_iter`, and `max_overlaps`
   are inert under the default `ProjectionSolver` (it has no force loop and
