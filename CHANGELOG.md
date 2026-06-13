@@ -75,8 +75,8 @@ user-facing breaking changes** to report.
   `textpositions_offset` — finite ones become pinned offsets, `NaN` entries
   auto-place around them), warm-start under `advance_optimization!` (`reset=false`),
   and obstacle avoidance via `obstacles::Vector{Rect2f}`. `solve_stats(alg)` returns
-  the read-only quality functional `(; iter, residual, overlaps, mean_leader,
-  crossings, dropped)` from the most recent solve.
+  the read-only quality functional `(; iter, residual, overlaps, point_overlaps,
+  mean_leader, crossings, dropped)` from the most recent solve.
 
 #### Geometry, measurement, connectors, styling
 
