@@ -275,10 +275,13 @@ end
     # After equilibrium under reset=true the anchor must not lie strictly
     # inside each label's bbox; a subsequent reset=false solve should
     # maintain that invariant — warm-start mustn't degenerate the layout.
-    # Note: ProjectionSolver places labels tangent to the anchor with
-    # the default point_padding = 0 (the anchor may sit exactly ON the box
-    # edge; the connector is then suppressed by min_segment_length), so the
-    # invariant is "anchor is not strictly INSIDE the box interior."
+    # Note: under the default point_padding = 5.0 (#21) the marker-clearance
+    # floor actively pushes the anchor clear of its own label — here each
+    # anchor ends up ≈5px outside the box edge (verified gap = 5.0 px), so
+    # the "anchor is not strictly INSIDE the box interior" invariant holds
+    # with room to spare. The assertion is geometry-agnostic (strict-inside
+    # only), so it passed under the old pp=0 tangent placement too; the floor
+    # bump only strengthens the margin, it does not change what is tested.
     n = 4
     textpositions = [Point2f(50i, 50) for i in 1:n]
     textpositions_offset = fill(Point2f(NaN, NaN), n)
@@ -695,4 +698,12 @@ end
     @test offsets[1] == Vec2f(3, 3)
     @test offsets[2] == Vec2f(3, -4)
     @test solve_stats(alg).iter == 0     # bypass: solver never ran
+end
+
+@testset "TextRepelAlgorithm default point_padding = 5.0 (#21)" begin
+    alg = TextRepelAlgorithm()
+    @test alg.params.point_padding == 5.0
+    # explicit override still works
+    alg2 = TextRepelAlgorithm(; point_padding = 1.5)
+    @test alg2.params.point_padding == 1.5
 end

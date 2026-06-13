@@ -35,10 +35,14 @@ fig
 ```
 
 Key attributes: `only_move` (`:both`/`:x`/`:y`, constrains which axis labels may
-move), `box_padding`/`point_padding` (label / anchor breathing room),
-`min_segment_length` (connector visibility cutoff), `background` (boxed labels),
-`segments`/`segmentcolor`/`linewidth` (connectors). The default solver guarantees
-zero label overlap and automatically drops labels when a scene is over-capacity.
+move), `box_padding` (label breathing room), `point_padding` (**marker clearance** —
+the minimum gap kept between every scatter marker and the nearest label text edge,
+enforced after layout for a label's own *and* its neighbours' markers; default 5 px),
+`markersize` (convenience: set it to your `scatter!` marker size and `point_padding`
+is derived as `markersize/2 + 0.5`), `min_segment_length` (connector visibility
+cutoff), `background` (boxed labels), `segments`/`segmentcolor`/`linewidth`
+(connectors). The default solver guarantees zero label overlap, keeps labels clear of
+the markers, and automatically drops labels when a scene is over-capacity.
 
 > The force-tuning attributes `force`, `force_point`, `force_pull`, `max_iter`, and
 > `max_overlaps` are **inert under the default `ProjectionSolver`** (it has no force
@@ -47,11 +51,20 @@ zero label overlap and automatically drops labels when a scene is over-capacity.
 
 ## How it works
 
-Three layers: **measure** (pixel box sizes via TextMeasure.jl; rich text via Makie),
-**solve** (a deterministic, zero-overlap projection solver in pixel space — discrete
-Imhof side-selection → crossing repair → Dykstra constraint-projection legalization),
-**render** (text + optional boxes + connectors). Output is deterministic — same data,
-same figure.
+Three layers:
+
+- **measure** — every label's box is sized from its *true* rendered extent via
+  [TextMeasure.jl](https://github.com/jowch/TextMeasure.jl), render-free (no `Scene`
+  is allocated; plain strings, LaTeX, and Makie rich text are all supported). Because
+  placement works from real glyph metrics rather than character-count estimates,
+  overlap removal and marker clearance are computed against the actual text box — not
+  an approximation.
+- **solve** — a deterministic, zero-overlap projection solver in pixel space: discrete
+  Imhof side-selection → crossing repair → Dykstra constraint-projection legalization,
+  with every data anchor treated as a keep-out so labels never sit under their markers.
+- **render** — text + optional boxes + connectors.
+
+Output is deterministic — same data, same figure.
 
 ## Two surfaces
 

@@ -21,7 +21,19 @@ solves under `advance_optimization!`.
 system `annotation!` uses internally. Convert a data-space rectangle
 with `Makie.project`.
 
-# Caveats
+## Key defaults
+
+- `point_padding` defaults to `5.0` (pixels) on this surface. This
+  provides a minimum clearance (marker clearance floor) between each
+  data point (anchor) and any non-pinned label's bounding box. It is a
+  generic anchor keep-out: the solver treats the anchor as a point
+  obstacle and pushes label boxes at least `point_padding` px away.
+  Pass `point_padding = 0.0` explicitly to disable clearance.
+  Note: a pinned label whose user-supplied offset places its own box
+  over its own marker is held bit-identically — it is neither pushed
+  nor dropped.
+
+## Caveats
 
 - Pinning a label so that its data anchor falls strictly inside the
   rendered bbox suppresses that label's connector line. This is
@@ -36,7 +48,7 @@ with `Makie.project`.
   reports only the last one to call `calculate_best_offsets!`. Use
   separate instances per plot if you need per-plot diagnostics.
 
-# Scope
+## Scope
 
 `max_overlaps` and background boxes are `textrepel!`-only — they have
 no equivalent in `annotation!`'s algorithm contract.
@@ -59,7 +71,7 @@ function TextRepelAlgorithm(; obstacles::Vector{Rect2f} = Rect2f[],
     bounds === nothing || @warn "TextRepelAlgorithm: `bounds` is set \
         automatically from the axis viewport; remove this keyword." maxlog=1
 
-    params = RepelParams(; kwargs...)
+    params = RepelParams(; merge((; point_padding = 5.0), values(kwargs))...)
     if params.max_overlaps != Inf
         @warn "TextRepelAlgorithm: `max_overlaps` has no equivalent under \
             annotation!; use `textrepel!` if you need label dropping." maxlog=1

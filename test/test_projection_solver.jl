@@ -8,9 +8,9 @@ using Test
 # Defined first because @testset bodies execute top-to-bottom as the file loads.
 randn_stub(i) = sin(Float64(i) * 12.9898) * 4.0
 
-psz(sizes, bp) = [s .+ Vec2f(2bp, 2bp) for s in sizes]
+psz_proj(sizes, bp) = [s .+ Vec2f(2bp, 2bp) for s in sizes]
 function novl(anchors, offsets, sizes, bp; dropped = nothing)
-    ps = psz(sizes, bp); n = length(anchors); c = 0
+    ps = psz_proj(sizes, bp); n = length(anchors); c = 0
     for i in 1:n, j in (i+1):n
         (dropped !== nothing && (dropped[i] || dropped[j])) && continue
         ox = (ps[i][1]+ps[j][1])/2 - abs((anchors[i][1]+offsets[i][1]) - (anchors[j][1]+offsets[j][1]))
@@ -108,7 +108,7 @@ end
     p = RepelParams()
     anchors = [Point2f(0, 0), Point2f(0, 0), Point2f(0, 0)]
     sizes   = [Vec2f(20, 20) for _ in 1:3]
-    ps = psz(sizes, p.box_padding)
+    ps = psz_proj(sizes, p.box_padding)
     offsets = [Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0)]   # all coincident → all overlap all
     dropped = falses(3)
     idx = drop_most_overlapped!(dropped, anchors, offsets, ps, nothing)
@@ -123,7 +123,7 @@ end
     # index (label 2, ov=0) that the tie-break fallback would pick if obstacles were ignored.
     anchors = [Point2f(50, 50), Point2f(300, 300)]
     sizes   = [Vec2f(20, 20) for _ in 1:2]
-    ps = psz(sizes, p.box_padding)
+    ps = psz_proj(sizes, p.box_padding)
     offsets = [Vec2f(0, 0), Vec2f(0, 0)]
     obstacles = [Rect2f(40, 40, 20, 20)]                 # covers label 1's box
     dropped = falses(2)
@@ -234,4 +234,94 @@ end
                    min_segment_length = params.min_segment_length)
     @test q.overlaps == 0                          # survivors overlap-free (zero-overlap wins conflicts)
     @test any(res.dropped)                         # over-capacity ⇒ at least one drop, no hang
+end
+
+@testset "marker-clearance floor (#21)" begin
+    using MakieTextRepel: ProjectionSolver, RepelParams, solve_cluster, point_covered, box_at
+    bounds = Rect2f(0, 0, 200, 200)
+    EPS = 0.05
+
+    # --- Floor regression (warm-start legalize-erasure) ---
+    anchors = [Point2f(50, 100), Point2f(80, 100)]
+    sizes   = [Vec2f(40, 20),   Vec2f(40, 20)]
+    pp = 5.0
+    s = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp))
+    init = [Vec2f(15, 0), Vec2f(0, -80)]
+    res = solve_cluster(s, anchors, sizes, bounds; init_state = init)
+    for i in eachindex(anchors)
+        res.dropped[i] && continue
+        bi = box_at(anchors[i], res.offsets[i], sizes[i])     # UNPADDED text box
+        for j in eachindex(anchors)
+            @test !point_covered(anchors[j], bi, pp - EPS)    # own + foreign cleared
+        end
+    end
+
+    # --- Pinned label on its own marker is bit-identical (exempt) ---
+    pin = BitVector([true, false])
+    pinoff = [Vec2f(0, 0), Vec2f(0, -80)]     # label 1 sits ON its own anchor
+    s2 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp))
+    res2 = solve_cluster(s2, anchors, sizes, bounds; init_state = pinoff,
+                         pin_mask = pin, pinned_offsets = pinoff)
+    @test res2.offsets[1] == Vec2f(0, 0)      # pinned: not pushed off its marker
+    @test res2.dropped[1] == false            # pinned: not dropped
+
+    # --- only_move=:x, both anchors on one side → cleared on x, no drop ---
+    # Label 2 parked FAR LEFT IN X (Vec2f(-80,0)); only_move=:x preserves that x so it
+    # never collapses onto / overlaps label 1. With no label-label push, ONLY the marker
+    # keep-out can move label 1 → the test genuinely exercises the floor.
+    anchors_x = [Point2f(40, 100), Point2f(50, 100)]
+    s3 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp,
+                                        only_move = :x))
+    res3 = solve_cluster(s3, anchors_x, sizes, bounds; init_state = [Vec2f(15, 0), Vec2f(-80, 0)])
+    @test count(res3.dropped) == 0
+    b1 = box_at(anchors_x[1], res3.offsets[1], sizes[1])
+    @test !point_covered(anchors_x[2], b1, pp - EPS)   # foreign cleared on locked x axis
+    @test !point_covered(anchors_x[1], b1, pp - EPS)   # own marker cleared too
+end
+
+@testset "marker keep-out: anti-cascade + coverage (#21)" begin
+    using MakieTextRepel: ProjectionSolver, RepelParams, solve_cluster, point_covered, box_at
+    bounds = Rect2f(0, 0, 200, 200)
+
+    # --- Warm-start: a label on its own anchor is pushed off (own-marker floor) ---
+    anchors = [Point2f(100, 100)]
+    sizes   = [Vec2f(40, 20)]
+    pp = 5.0
+    s = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp))
+    res = solve_cluster(s, anchors, sizes, bounds; init_state = [Vec2f(0, 0)])
+    b = box_at(anchors[1], res.offsets[1], sizes[1])
+    @test !point_covered(anchors[1], b, pp - 0.05)     # pushed clear of own marker
+    @test res.dropped[1] == false
+
+    # --- Anti-cascade: marker-clearance that is in-bounds-UNSATISFIABLE must NOT drop a
+    # label (soft nodes excluded from the drop-triggering residual, §1a). Lock to y in a
+    # SHORT viewport so neither label can clear its own marker; labels far apart in x ⇒
+    # honest baseline drop count is 0. A regression that let soft count toward residual
+    # would drop a label here.
+    short  = Rect2f(0, 0, 200, 40)               # height 40; hh=10 ⇒ center y∈[10,30]
+    anchors2 = [Point2f(50, 20), Point2f(150, 20)]
+    sizes2   = [Vec2f(40, 20), Vec2f(40, 20)]
+    s2 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = 15.0,
+                                        only_move = :y))
+    res2 = solve_cluster(s2, anchors2, sizes2, short)
+    @test count(res2.dropped) == 0      # soft residual excluded ⇒ no cascade drop
+    bb1 = box_at(anchors2[1], res2.offsets[1], sizes2[1] .+ 8)
+    bb2 = box_at(anchors2[2], res2.offsets[2], sizes2[2] .+ 8)
+    @test MakieTextRepel.overlap_push(bb1, bb2) == Vec2f(0, 0)   # no label-label overlap
+
+    # --- Dropped-anchor keep-out participates: survivors clear foreign anchors (incl.
+    # a dropped label's anchor) in an over-capacity scene; best-effort escape allowed. ---
+    anchors3 = [Point2f(100, 100), Point2f(105, 100), Point2f(110, 100)]
+    sizes3   = [Vec2f(60, 30), Vec2f(60, 30), Vec2f(60, 30)]
+    small    = Rect2f(0, 0, 80, 80)     # too small for 3 big labels → at least one drops
+    s3 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = 5.0))
+    res3 = solve_cluster(s3, anchors3, sizes3, small)
+    for i in eachindex(anchors3)
+        res3.dropped[i] && continue
+        bi = box_at(anchors3[i], res3.offsets[i], sizes3[i])
+        for j in eachindex(anchors3)
+            j == i && continue
+            @test !point_covered(anchors3[j], bi, 5.0 - 0.05) || res3.residual > 0.5f0
+        end
+    end
 end

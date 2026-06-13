@@ -13,7 +13,7 @@ Base.@kwdef struct RepelParams
     max_iter::Int                   = 2000
     only_move::Symbol               = :both        # :both | :x | :y
     box_padding::Float64            = 4.0
-    point_padding::Float64          = 0.0
+    point_padding::Float64          = 0.0   # marker clearance: gap from each anchor/marker to the nearest label text edge (enforced post-legalize by the ProjectionSolver as a keep-out). Doubles as the ForceSolver point-repulsion halo radius. Primitive default 0.0; user surfaces (recipe attr, TextRepelAlgorithm) default to 5.0.
     max_overlaps::Float64           = Inf
     step_max::Float64               = 10.0          # per-iteration px clamp
     pull_threshold::Float64         = 1.0           # px; suppress spring within this

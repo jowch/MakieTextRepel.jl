@@ -102,6 +102,12 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
         end
     end
 
+    # Marker keep-out half-extent (signed). A label node carries padded half-extent
+    # (unpadded_half + box_padding); a fixed keep-out node of half-extent mc separates
+    # the pair to unpadded_half + point_padding ⇒ text edge clears the marker by exactly
+    # point_padding (independent of box_padding), matching point_covered.
+    mc = Float32(p.point_padding - p.box_padding)
+
     # Run the legalize → over-capacity-drop loop to convergence on a *given* offsets vector.
     # Returns (offsets, dropped, lz). Pure w.r.t. its inputs (mutates only locals).
     function legalize_and_drop(start_offsets::Vector{Vec2f})
@@ -111,10 +117,12 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
         while true
             act = Int[i for i in 1:n if !drp[i]]
             m = length(act); k = length(obstacles)
-            w_anchors = Vector{Point2f}(undef, m + k)
-            w_offsets = Vector{Vec2f}(undef, m + k)
-            w_psizes  = Vector{Vec2f}(undef, m + k)
-            w_fixed   = falses(m + k)
+            tot = m + k + n
+            w_anchors = Vector{Point2f}(undef, tot)
+            w_offsets = Vector{Vec2f}(undef, tot)
+            w_psizes  = Vector{Vec2f}(undef, tot)
+            w_fixed   = falses(tot)
+            w_soft    = falses(tot)
             for (t, i) in enumerate(act)
                 w_anchors[t] = anchors[i]; w_offsets[t] = offs[i]; w_psizes[t] = psizes[i]
                 (pin_mask !== nothing && pin_mask[i]) && (w_fixed[t] = true)
@@ -125,8 +133,17 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
                 w_psizes[m + t]  = Vec2f(ob.widths)
                 w_fixed[m + t]   = true
             end
+            # Marker keep-out: every anchor (own + foreign, incl. dropped/pinned), fixed
+            # + soft, ascending index → deterministic, round-invariant Dykstra order.
+            for i in 1:n
+                w_anchors[m + k + i] = anchors[i]
+                w_offsets[m + k + i] = Vec2f(0, 0)
+                w_psizes[m + k + i]  = Vec2f(2mc, 2mc)   # psize is full width; mc is the half-extent
+                w_fixed[m + k + i]   = true
+                w_soft[m + k + i]    = true
+            end
             lz = legalize(w_anchors, w_offsets, w_psizes, bounds;
-                          fixed = w_fixed, only_move = p.only_move)
+                          fixed = w_fixed, soft = w_soft, only_move = p.only_move)
             for (t, i) in enumerate(act)
                 offs[i] = lz.offsets[t]
             end

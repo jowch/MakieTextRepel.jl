@@ -90,13 +90,16 @@ end
 
 @testset "connectors suppressed when clamp pins anchor inside its own label" begin
     # Tiny viewport (100×80) + wide label anchored at the data midpoint: the
-    # label box (≈154 px wide) is wider than the axis viewport (≈43 px), so the
-    # clamp pins it to the lower edge while the anchor, projecting to pixel
-    # (≈2, ≈1), sits strictly inside the clamped box. The connector layer's
-    # strict-inside check (clip_to_box_edge → nothing) suppresses the segment.
-    # Locks the post-Task-4 behavior; relies on the bumped default
-    # point_padding = 2.0 to ensure the clamped box is large enough to contain
-    # the anchor.
+    # label box (≈154 px wide) is over 3× wider than the axis viewport
+    # (≈43 px). This is an OVER-CAPACITY scene for the 5px marker-clearance
+    # floor (#21): there is no in-bounds placement that clears the anchor, so
+    # the floor is waived and the clamp simply confines the oversized box to
+    # bounds. The anchor, projecting to pixel (≈2, ≈1), ends up strictly inside
+    # the clamped box (verified: box origin ≈(-111, 0.7), widths ≈(154, 24)).
+    # The connector layer's strict-inside check (clip_to_box_edge → nothing)
+    # then suppresses the segment. Survives the point_padding default bump
+    # 2.0→5.0 precisely because the scene is too small for the new floor to
+    # push the anchor clear — not because of any particular box size.
     fig = Figure(size = (100, 80)); ax = Axis(fig[1, 1])
     pts = Point2f[(0.5, 0.5)]
     pl = textrepel!(ax, pts; text = ["a-very-wide-label-name"],
@@ -255,4 +258,84 @@ end
     # The two coincident anchors must land at distinct rendered positions (fanned),
     # not collapsed onto the same offset.
     @test anchors[1] .+ offs[1] != anchors[2] .+ offs[2]
+end
+
+@testset "markersize attribute + default point_padding (#21)" begin
+    using CairoMakie
+    xs = [0.0, 1.0, 2.0]; ys = [0.0, 1.0, 0.5]
+    labels = ["a", "b", "c"]
+
+    # Default point_padding is now 5.0 on the recipe surface.
+    fig = Figure(); ax = Axis(fig[1, 1])
+    p = textrepel!(ax, xs, ys; text = labels)
+    Makie.update_state_before_display!(fig)
+    @test p.computed_params[].point_padding == 5.0
+
+    # markersize sets effective point_padding = m/2 + 0.5.
+    fig2 = Figure(); ax2 = Axis(fig2[1, 1])
+    p2 = textrepel!(ax2, xs, ys; text = labels, markersize = 9)
+    Makie.update_state_before_display!(fig2)
+    @test p2.computed_params[].point_padding == 9 / 2 + 0.5   # == 5.0
+
+    # markersize OVERRIDES an explicit point_padding.
+    fig3 = Figure(); ax3 = Axis(fig3[1, 1])
+    p3 = textrepel!(ax3, xs, ys; text = labels, markersize = 20, point_padding = 99.0)
+    Makie.update_state_before_display!(fig3)
+    @test p3.computed_params[].point_padding == 20 / 2 + 0.5  # markersize wins
+
+    # A Vector markersize raises a clear error. The validation lives in the solve lift,
+    # which this Makie/ComputePipeline version evaluates eagerly at plot-connect time,
+    # so the ArgumentError surfaces from the textrepel! call itself.
+    fig4 = Figure(); ax4 = Axis(fig4[1, 1])
+    @test_throws Exception begin
+        p4 = textrepel!(ax4, xs, ys; text = labels, markersize = [9, 9, 9])
+        Makie.update_state_before_display!(fig4)
+        p4.computed_params[]      # force the lift to run ⇒ ArgumentError propagates
+    end
+end
+
+@testset "hero dataset geometry: no marker occlusion (#21)" begin
+    using CairoMakie
+    using Random              # Random.seed!, randn (global RNG)
+    using MakieTextRepel: label_cost
+
+    function hero_dataset()
+        Random.seed!(20260527)
+        knot_centers = [(-0.7, 0.55), (0.75, -0.45), (0.05, 0.9)]
+        knot_counts  = [3, 3, 2]
+        xs = Float64[]; ys = Float64[]
+        for (c, k) in zip(knot_centers, knot_counts), _ in 1:k
+            push!(xs, c[1] + 0.03 * randn()); push!(ys, c[2] + 0.03 * randn())
+        end
+        for _ in 1:14
+            push!(xs, 0.85 * randn()); push!(ys, 0.85 * randn())
+        end
+        labels = ["node $(i)" for i in 1:length(xs)]
+        return xs, ys, labels
+    end
+
+    xs, ys, labels = hero_dataset()
+    # Reproduce the COMMITTED hero artifact geometry (examples/readme_example.jl): a
+    # 2100×700 figure with three aspect=1 titled panels; textrepel! lives in the middle.
+    # An earlier version of this test rendered a single 400×400 axis — a DIFFERENT pixel
+    # viewport that masked extra drops on the real 3-panel artifact (caught in PR review
+    # round 1: the committed 1200×400 hero dropped node 11 and node 19). At the hero size
+    # the scene has room, so the marker-clearance floor clears every marker (own + foreign)
+    # with NO label dropped — the honest "point_overlaps 1→0, no extra drops" result.
+    fig = Figure(size = (2100, 700), fontsize = 15)
+    Axis(fig[1, 1]; title = "text! (overlapping)", aspect = 1)
+    ax2 = Axis(fig[1, 2]; title = "textrepel! (resolved)", aspect = 1)
+    p = textrepel!(ax2, xs, ys; text = labels, fontsize = 13, markersize = 9)
+    scatter!(ax2, xs, ys; color = :tomato, markersize = 9)
+    Axis(fig[1, 3]; title = "annotation! + TextRepelAlgorithm", aspect = 1)
+    Makie.update_state_before_display!(fig)
+
+    dropped = p.computed_dropped[]
+    q = label_cost(p.computed_anchors[], p.computed_sizes[]; offsets = p.computed_offsets[],
+                   bounds = p.computed_params[].bounds, dropped = dropped,
+                   box_padding = 4.0,
+                   point_padding = 9 / 2 + 0.5,   # markersize=9 ⇒ radius 4.5 + 0.5px gap = 5.0
+                   min_segment_length = 2.0)
+    @test count(dropped) == 0      # all 22 labels retained (no over-capacity drop)
+    @test q.point_overlaps == 0    # every marker cleared (1 → 0 vs pre-#21)
 end
