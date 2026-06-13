@@ -42,7 +42,7 @@
 - Modify: `src/legalize.jl` (signature + final residual loop)
 - Test: `test/test_legalize.jl`
 
-- [ ] **Step 1: Write the failing tests** — append to `test/test_legalize.jl` inside the existing `@testset`. These drive `legalize` directly.
+- [ ] **Step 1: Write the failing tests** — append a new top-level `@testset` block at the end of `test/test_legalize.jl` (the file has no single enclosing testset). These drive `legalize` directly.
 
 ```julia
 @testset "soft keep-out nodes (#21)" begin
@@ -64,18 +64,21 @@
     @test abs(c1 - 60) ≥ 21 - 0.05
 
     # (b) A SOFT fixed node's residual is excluded, with a non-soft negative control.
-    # Clamp a movable label against the right bound and place a fixed node so full
-    # separation is impossible in-bounds → a real penetration remains.
+    # Lock movement to x (only_move=:x) AND clamp the label against the right bound, so
+    # the separation is genuinely unsatisfiable in-bounds (the label cannot escape on y).
+    # Without the lock the label would just slide down to clear on y and residual→0,
+    # making the negative control vacuous — that bug was caught in plan review.
     bsm     = Rect2f(0, 0, 100, 200)
     anc     = [Point2f(95, 100), Point2f(70, 100)]
     off     = [Vec2f(0, 0), Vec2f(0, 0)]
     psz     = [Vec2f(40, 20), Vec2f(40, 20)]    # label (hw 20) + fixed node (hw 20)
     fx      = BitVector([false, true])
-    # label clamps to right edge: center x ≤ 100-20 = 80; node at 70, gap needed 40 →
-    # need |Δx| ≥ 40 but max in-bounds is 80-70 = 10 → unsatisfiable → residual > 0.
-    rsoft   = legalize(anc, off, psz, bsm; fixed = fx, soft = BitVector([false, true]))
-    rhard   = legalize(anc, off, psz, bsm; fixed = fx)             # soft defaults to none
-    @test rsoft.offsets[1] != Vec2f(0, 0)        # push still fired
+    # only_move=:x ⇒ label clamps to center x = 80 (right edge); node at 70 needs a
+    # 40px center gap ⇒ achievable |Δx| = 10 ≪ 40 ⇒ penetration ~20px remains.
+    rsoft   = legalize(anc, off, psz, bsm; fixed = fx, soft = BitVector([false, true]),
+                       only_move = :x)
+    rhard   = legalize(anc, off, psz, bsm; fixed = fx, only_move = :x)  # soft = none
+    @test rsoft.offsets[1] != Vec2f(0, 0)        # push still fired (label moved off node)
     @test rsoft.residual ≤ 0.5f0                 # soft pair excluded from residual
     @test rhard.residual > 0.5f0                 # negative control: counted when not soft
 
@@ -193,12 +196,21 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
     @test res2.dropped[1] == false            # pinned: not dropped
 
     # --- only_move=:x, foreign marker covering on both axes → cleared on x, no drop ---
+    # BOTH anchors must sit on the SAME side of the label so the single locked x-axis can
+    # clear them together. (A label wedged BETWEEN its own anchor and a foreign anchor on
+    # the locked axis cannot clear both — that is the documented §5 best-effort
+    # degradation, and a fixture asserting clearance there is RED forever. Caught in
+    # plan review.) Here own anchor (40) and foreign anchor (50) are both LEFT of the
+    # label's settle point; the label shoots right (Δ20 < the Δ30 of going left) to a
+    # center of 75, span x∈[55,95], so both anchors clear on x.
+    anchors_x = [Point2f(40, 100), Point2f(50, 100)]
     s3 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp,
                                         only_move = :x))
-    res3 = solve_cluster(s3, anchors, sizes, bounds; init_state = [Vec2f(15, 0), Vec2f(60, 0)])
+    res3 = solve_cluster(s3, anchors_x, sizes, bounds; init_state = [Vec2f(15, 0), Vec2f(0, -80)])
     @test count(res3.dropped) == 0
-    b1 = box_at(anchors[1], res3.offsets[1], sizes[1])
-    @test !point_covered(anchors[2], b1, pp - EPS)   # cleared on the unlocked x axis
+    b1 = box_at(anchors_x[1], res3.offsets[1], sizes[1])
+    @test !point_covered(anchors_x[2], b1, pp - EPS)   # foreign cleared on the unlocked x axis
+    @test !point_covered(anchors_x[1], b1, pp - EPS)   # own marker cleared too
 end
 ```
 
@@ -303,16 +315,22 @@ These lock §1a (marker residual never drops) and the full-anchor-list keep-out.
     @test !point_covered(anchors[1], b, pp - 0.05)     # pushed clear of own marker
     @test res.dropped[1] == false
 
-    # --- Anti-cascade: a corner anchor whose clearance is in-bounds-unsatisfiable
-    # must NOT cause extra drops vs the no-marker-conflict baseline (zero here). ---
-    # Two well-separated labels (no label-label overlap) → baseline drops 0; one is at a
-    # tight corner so its own-marker clearance cannot be fully met in-bounds.
-    anchors2 = [Point2f(2, 2), Point2f(150, 150)]
+    # --- Anti-cascade: marker-clearance that is in-bounds-UNSATISFIABLE must NOT drop a
+    # label (soft nodes are excluded from the drop-triggering residual, §1a). This is the
+    # discriminating test: if a regression let soft nodes count toward residual, the drop
+    # loop would fire and shed a label here. Lock to y in a SHORT viewport so neither
+    # label can move far enough to clear its own marker, while the two labels are far
+    # apart in x (no label-label overlap ⇒ the honest baseline drop count is 0).
+    short  = Rect2f(0, 0, 200, 40)               # height 40; label hh=10 ⇒ center y∈[10,30]
+    anchors2 = [Point2f(50, 20), Point2f(150, 20)]
     sizes2   = [Vec2f(40, 20), Vec2f(40, 20)]
-    s2 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = 30.0)) # huge clearance, infeasible at corner
-    res2 = solve_cluster(s2, anchors2, sizes2, bounds)
+    # point_padding=15 ⇒ own-marker needs |Δy| ≥ hh+pp = 25, but max achievable is 10 ⇒
+    # infeasible on the locked y axis for both labels.
+    s2 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = 15.0,
+                                        only_move = :y))
+    res2 = solve_cluster(s2, anchors2, sizes2, short)
     @test count(res2.dropped) == 0      # soft residual excluded ⇒ no cascade drop
-    # And the two labels still do not overlap each other:
+    # And the two labels still do not overlap each other (far apart in x):
     bb1 = box_at(anchors2[1], res2.offsets[1], sizes2[1] .+ 8)
     bb2 = box_at(anchors2[2], res2.offsets[2], sizes2[2] .+ 8)
     @test MakieTextRepel.overlap_push(bb1, bb2) == Vec2f(0, 0)
@@ -387,10 +405,15 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
     Makie.update_state_before_display!(fig3)
     @test p3.computed_params[].point_padding == 20 / 2 + 0.5  # markersize wins
 
-    # A Vector markersize raises a clear error at display (solve) time.
+    # A Vector markersize raises a clear error. The validation lives in the solve lift,
+    # so force the lift to evaluate by dereferencing a computed node (don't rely on the
+    # exception surfacing through update_state_before_display! alone — Makie may defer it).
     fig4 = Figure(); ax4 = Axis(fig4[1, 1])
-    textrepel!(ax4, xs, ys; text = labels, markersize = [9, 9, 9])
-    @test_throws Exception Makie.update_state_before_display!(fig4)
+    p4 = textrepel!(ax4, xs, ys; text = labels, markersize = [9, 9, 9])
+    @test_throws Exception begin
+        Makie.update_state_before_display!(fig4)
+        p4.computed_params[]      # force the lift to run ⇒ ArgumentError propagates
+    end
 end
 ```
 
@@ -410,18 +433,15 @@ In `src/recipe.jl`, in the `@recipe TextRepel` block, change the `point_padding`
     markersize = nothing
 ```
 
-In `Makie.plot!(p::TextRepel)`, add `p.markersize` to the solve `lift`'s input list and its corresponding parameter, then derive the effective `point_padding` before building `RepelParams`. Concretely, change the lift call:
+In `Makie.plot!(p::TextRepel)`, make **four targeted edits** to the existing `solved = lift(...) do ...` block — do **not** retype the whole block (it carries a load-bearing multi-line comment about `bounds`/`computed_params` that must be preserved):
+
+1. **Append `p.markersize`** as the last input to the `lift(...)` call (after `p.min_segment_length`).
+2. **Append `ms`** as the last argument of the `do px, labels, ..., ml` parameter list.
+3. **Insert the effective-`point_padding` derivation** immediately after the `sizes = measure_labels(labels, font, fs, 1.0)` line:
 
 ```julia
-    solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
-                  p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
-                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs,
-                  p.min_segment_length, p.markersize) do px, labels, fs, font,
-                                                          fr, frp, fpl, mi, om,
-                                                          bp, pp, mo, bnds, ml, ms
-        anchors = [Point2f(q[1], q[2]) for q in px]
-        sizes = measure_labels(labels, font, fs, 1.0)
-        # markersize (sibling scatter) overrides point_padding when set.
+        # markersize (sibling scatter) overrides point_padding when set. textrepel!
+        # draws no markers; this only declares the sibling size for clearance.
         eff_pp = if ms === nothing
             Float64(pp)
         elseif ms isa Real
@@ -429,19 +449,11 @@ In `Makie.plot!(p::TextRepel)`, add `p.markersize` to the solve `lift`'s input l
         else
             throw(ArgumentError("textrepel!: `markersize` must be a scalar Real or nothing; got $(typeof(ms)). Per-point marker sizes are not supported — set `point_padding` directly."))
         end
-        params = RepelParams(; force = Tuple(Float64.(fr)),
-                               force_point = Tuple(Float64.(frp)),
-                               force_pull = Tuple(Float64.(fpl)),
-                               max_iter = Int(mi), only_move = Symbol(om),
-                               box_padding = Float64(bp), point_padding = eff_pp,
-                               max_overlaps = Float64(mo), bounds = bnds,
-                               min_segment_length = Float64(ml))
-        offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds)
-        (; anchors, sizes, offsets, dropped, params)
-    end
 ```
 
-(Keep the rest of `plot!` unchanged. `computed_params` already exposes `params`, so `point_padding` now carries `eff_pp`.)
+4. **Swap** the `point_padding = Float64(pp)` argument in the `RepelParams(; ...)` construction to `point_padding = eff_pp`.
+
+Leave everything else (the `bounds`/`computed_params` comment, the `solve_cluster` call, the returned NamedTuple) untouched. `computed_params` already exposes `params`, so `point_padding` now carries `eff_pp`.
 
 - [ ] **Step 4: Run to verify they pass**
 
@@ -521,24 +533,32 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
 In `examples/readme_example.jl`, replace the inline data-generation block (the `knot_centers`/loops through `points = Point2f.(xs, ys)`) with a call to a small pure function defined at the top of the file, so both the example and the test build the identical scene:
 
 ```julia
-# Deterministic hero dataset (shared with test/test_integration.jl). Seeded RNG ⇒ stable.
+# Deterministic hero dataset (shared with test/test_integration.jl). Uses the GLOBAL RNG
+# via Random.seed! + bare randn() in the SAME draw order (x then y per point) as the
+# original inline block, so the points — and the committed hero image — are byte-identical.
+# (A self-contained MersenneTwister would produce DIFFERENT points and silently change the
+# image + invalidate the documented point_overlaps==1 baseline — caught in plan review.)
 function hero_dataset()
-    rng = MersenneTwister(20260527)
+    Random.seed!(20260527)
     knot_centers = [(-0.7, 0.55), (0.75, -0.45), (0.05, 0.9)]
     knot_counts  = [3, 3, 2]
     xs = Float64[]; ys = Float64[]
     for (c, k) in zip(knot_centers, knot_counts), _ in 1:k
-        push!(xs, c[1] + 0.03 * randn(rng)); push!(ys, c[2] + 0.03 * randn(rng))
+        push!(xs, c[1] + 0.03 * randn()); push!(ys, c[2] + 0.03 * randn())
     end
     for _ in 1:14
-        push!(xs, 0.85 * randn(rng)); push!(ys, 0.85 * randn(rng))
+        push!(xs, 0.85 * randn()); push!(ys, 0.85 * randn())
     end
     labels = ["node $(i)" for i in 1:length(xs)]
     return xs, ys, labels
 end
 ```
 
-Replace `using Random; Random.seed!(20260527)` with `using Random` (the function now owns the RNG via `MersenneTwister`), and set `xs, ys, labels = hero_dataset()`. Pass `markersize = 9` to **both** the `textrepel!` and the `annotation!`/`TextRepelAlgorithm` calls so the panels clear the markers:
+Keep `using Random` (the function uses `Random.seed!` + `randn`); remove the top-level
+`Random.seed!(20260527)` line (the function now owns seeding). Set
+`xs, ys, labels = hero_dataset()` and, immediately after, **retain** `points = Point2f.(xs, ys)`
+(the `annotation!` call uses `points`). Pass `markersize = 9` to **both** the `textrepel!`
+and the `annotation!`/`TextRepelAlgorithm` calls so the panels clear the markers:
 
 ```julia
     textrepel!(ax2, xs, ys; text = labels, fontsize = 13, markersize = 9)
@@ -550,25 +570,25 @@ Replace `using Random; Random.seed!(20260527)` with `using Random` (the function
 
 - [ ] **Step 2: Write the failing integration test**
 
-Append to `test/test_integration.jl`. Reconstruct the same dataset (copy the seeded constructor — tests must not `include` an example), solve directly, and assert.
+Append to `test/test_integration.jl`. Reconstruct the same dataset (copy the seeded constructor verbatim — tests must not `include` an example), solve, and assert. This validates the floor on the **hero dataset geometry** (it renders in a 400×400 fig, not the 1200×400 three-panel hero layout, so pixel anchors differ from the image — do not over-read it as pixel-identical to the committed PNG).
 
 ```julia
-@testset "hero dataset: no marker occlusion (#21)" begin
+@testset "hero dataset geometry: no marker occlusion (#21)" begin
     using CairoMakie
-    using Random: MersenneTwister, randn
+    using Random              # Random.seed!, randn (global RNG)
     using MakieTextRepel: ProjectionSolver, RepelParams, solve_cluster, label_cost,
                           measure_labels
 
     function hero_dataset()
-        rng = MersenneTwister(20260527)
+        Random.seed!(20260527)
         knot_centers = [(-0.7, 0.55), (0.75, -0.45), (0.05, 0.9)]
         knot_counts  = [3, 3, 2]
         xs = Float64[]; ys = Float64[]
         for (c, k) in zip(knot_centers, knot_counts), _ in 1:k
-            push!(xs, c[1] + 0.03 * randn(rng)); push!(ys, c[2] + 0.03 * randn(rng))
+            push!(xs, c[1] + 0.03 * randn()); push!(ys, c[2] + 0.03 * randn())
         end
         for _ in 1:14
-            push!(xs, 0.85 * randn(rng)); push!(ys, 0.85 * randn(rng))
+            push!(xs, 0.85 * randn()); push!(ys, 0.85 * randn())
         end
         labels = ["node $(i)" for i in 1:length(xs)]
         return xs, ys, labels
