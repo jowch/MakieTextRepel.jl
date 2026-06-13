@@ -6,12 +6,12 @@
 # abstract `NamedTuple`) keeps the `stats` Ref type-stable and enforces the same field
 # set/types at every write site: the constructor below, `solve_cluster`, and the
 # annotation all-pinned bypass. Field order matches those write sites (no conversion).
-const ProjectionStats = NamedTuple{(:overlaps, :mean_leader, :crossings, :iter, :residual, :dropped),
-                                   Tuple{Int, Float32, Int, Int, Float32, Int}}
+const ProjectionStats = NamedTuple{(:overlaps, :point_overlaps, :mean_leader, :crossings, :iter, :residual, :dropped),
+                                   Tuple{Int, Int, Float32, Int, Int, Float32, Int}}
 
 """
 `ProjectionSolver` carries `RepelParams` and a `stats` Ref holding the last solve's
-Q diagnostics `(overlaps, mean_leader, crossings, iter, residual, dropped)`.
+Q diagnostics `(overlaps, point_overlaps, mean_leader, crossings, iter, residual, dropped)`.
 """
 struct ProjectionSolver <: AbstractClusterSolver
     params::RepelParams
@@ -19,9 +19,9 @@ struct ProjectionSolver <: AbstractClusterSolver
 end
 
 ProjectionSolver(params::RepelParams) =
-    ProjectionSolver(params, Ref{ProjectionStats}((; overlaps = 0, mean_leader = 0f0,
-                                                     crossings = 0, iter = 0,
-                                                     residual = 0f0, dropped = 0)))
+    ProjectionSolver(params, Ref{ProjectionStats}((; overlaps = 0, point_overlaps = 0,
+                                                     mean_leader = 0f0, crossings = 0,
+                                                     iter = 0, residual = 0f0, dropped = 0)))
 
 """
 Mark the still-active, non-pinned label whose padded box overlaps the most other
@@ -144,7 +144,8 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
     q = label_cost(anchors, sizes; offsets = offsets, bounds = bounds, dropped = dropped,
                    box_padding = p.box_padding, point_padding = p.point_padding,
                    min_segment_length = p.min_segment_length)
-    s.stats[] = (; overlaps = q.overlaps, mean_leader = q.mean_leader, crossings = q.crossings,
+    s.stats[] = (; overlaps = q.overlaps, point_overlaps = q.point_overlaps,
+                   mean_leader = q.mean_leader, crossings = q.crossings,
                    iter = lz.rounds_used, residual = lz.residual, dropped = count(dropped))
     return (; offsets = offsets, dropped = dropped, iter = lz.rounds_used, residual = lz.residual)
 end

@@ -50,7 +50,7 @@ end
     s = solve_stats(alg)
     @test s isa NamedTuple
     @test Set(propertynames(s)) ==
-          Set((:iter, :residual, :overlaps, :mean_leader, :crossings, :dropped))
+          Set((:iter, :residual, :overlaps, :point_overlaps, :mean_leader, :crossings, :dropped))
     @test s.iter == 0
     @test s.residual === 0f0
 end
@@ -115,8 +115,8 @@ end
         @test offsets[i][1] ≈ 10f0
         @test offsets[i][2] ≈ 20f0
     end
-    @test solve_stats(alg) == (; overlaps = 0, mean_leader = 0f0, crossings = 0,
-                                 iter = 0, residual = 0f0, dropped = 0)
+    @test solve_stats(alg) == (; overlaps = 0, point_overlaps = 0, mean_leader = 0f0,
+                                 crossings = 0, iter = 0, residual = 0f0, dropped = 0)
 end
 
 @testset "dispatch — per-label pinning (mixed mode)" begin
