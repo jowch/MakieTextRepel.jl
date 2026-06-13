@@ -77,6 +77,12 @@ skip.
 `drop_most_overlapped!` — so own-marker coverage is never *counted* as a droppable
 overlap.
 
+**Node-ordering contract (determinism).** Append the `n` anchor keep-out nodes in
+**ascending anchor index, after the label and obstacle nodes, every round** — the full
+anchor list independent of the current dropped set. This pins Dykstra's projection
+order, keeping the solve deterministic and round-invariant. A future refactor must not
+reorder these appends.
+
 #### 1a. Soft nodes — marker clearance never triggers a drop
 
 **Problem the review surfaced (major):** `legalize`'s returned `residual` is measured
@@ -103,9 +109,17 @@ final residual loop. `dykstra!` is unchanged.
 
 ### 2. `markersize` convenience attribute on `textrepel!`
 
-New **recipe-only** attribute `markersize = nothing` (scalar `Real` or `nothing`; a
-`Vector` raises a clear `ArgumentError`, matching the deferred-snooping rationale —
-per-point marker sizes are out of scope). It is **not** a `RepelParams` field.
+New **recipe-only** attribute `markersize = nothing` (scalar `Real` or `nothing`). It
+is **not** a `RepelParams` field. **`textrepel!` draws no markers** — this attribute
+only declares the size of the *sibling* `scatter!` marker so the solver can clear it;
+the docstring's first sentence must say so plainly (the name mirrors Makie's scatter
+attribute for discoverability, but the recipe never renders a marker itself). The
+`m/2 + 0.5` radius→clearance derivation assumes a **disc marker in
+`markerspace = :pixel`** (the scatter default); for non-disc or `:data`-space markers,
+set `point_padding` manually (documented). A `Vector` `markersize` raises a clear
+`ArgumentError` whose message names the attribute — note this fires on **first
+solve/display** (inside the lift), not at construction, since the recipe validates in
+the solve path; documented.
 
 In the recipe `plot!` body, before `RepelParams` construction inside the solve `lift`,
 derive the effective `point_padding`:
@@ -166,14 +180,25 @@ their pinned offset and never pushed off a marker (see §5). Documented in the
 and its final in-bounds clamp can pull a box back into a node it had been separated
 from. So the floor cannot be claimed unconditionally.
 
-**Guaranteed** `point_covered(anchor_j, unpadded_box_i, point_padding) == false` for
-label `i` × anchor `j` **only when**: the layout is feasible (not over-capacity), the
-anchor can be cleared in-bounds, `only_move = :both`, label `i` is non-pinned and
-non-dropped, `align = (:center,:center)`, and the solve converged (returned
-`residual ≤ 0.5`). Outside these conditions it degrades to best-effort with the
-shortfall reported via `point_overlaps`/`residual` — the same posture label–label
-overlap already has. **Pinned labels are exempt** (held bit-identically at their
-pinned offset; never pushed, never dropped, no warning).
+The floor is a **per-axis-disjunctive** clearance: `legalize` separates each
+overlapping pair on a single (cheaper) axis, while `point_covered` is a two-axis AND
+(false as soon as the anchor is outside the expanded box on *either* axis). So the
+achievable invariant is "cleared on at least one axis to ≥ `unpadded_half +
+point_padding`", which makes `point_covered(...) == false`. It is **not** a two-axis
+center-gap guarantee.
+
+**Guaranteed** `point_covered(anchor_j, unpadded_box_i, point_padding − τ) == false`
+(for a small `τ ≈ 0.01` px = Dykstra detection tol + Float32 noise) for label `i` ×
+anchor `j` **only when**: the layout is feasible (the anchor can be cleared in-bounds),
+`only_move = :both`, label `i` is non-pinned and non-dropped, `align = (:center,:center)`,
+the label–marker constraint was not overridden by a competing label–label constraint in
+the same Dykstra pass, and the solve converged. **This floor is NOT witnessed by the
+returned `residual`** — by §1a the soft keep-out nodes are excluded from `residual`, so
+`residual ≤ 0.5` says nothing about marker clearance. Marker-clearance shortfall is
+surfaced only via `cost.jl`'s `point_overlaps`. Outside these conditions the floor
+degrades to best-effort (reported via `point_overlaps`), the same posture label–label
+overlap has. **Pinned labels are exempt** (held bit-identically at their pinned offset;
+never pushed, never dropped, no warning).
 
 ### 6. Documentation
 
@@ -187,12 +212,20 @@ guidance: set `point_padding = marker_radius + small_gap`, or use `markersize`.
 ### 7. Performance note (minor)
 
 Adding `n` fixed keep-out nodes grows the legalize pair scan from `O((m+k)²)` to
-`O((m+k+n)²)`, repeated inside each UNCROSS swap trial. Marker-marker and
+`O((m+k+n)²)` per round, repeated inside each UNCROSS swap trial. Marker-marker and
 marker-obstacle pairs are skipped cheaply by the existing `(!movable[i] &&
-!movable[j])` boolean guard (no `overlap_push`), so the added cost is a constant-factor
-(~4×) blowup on the cheap skip check, negligible for typical `n` (tens). No
-optimization in v1; a complexity note is added. Spatial pruning of each label's
-keep-out set is a documented future option.
+!movable[j])` boolean guard, but the **`n × m` label-vs-marker pairs are real
+constraint evaluations** (overlap detection + possible Dykstra constraint), not skips —
+that is the actual added cost. Cheap for typical `n` (tens); no optimization in v1, with
+a complexity note added. Spatial pruning of each label's keep-out set is a documented
+future option.
+
+**Round-cap interaction:** markers never *force* extra rounds in the common case (a
+satisfied soft pair adds no constraint, so the no-constraint early break still fires).
+But a corner/edge anchor whose clearance is in-bounds-unsatisfiable can cycle — the
+final in-bounds clamp re-introduces the penetration the keep-out re-pushes — so such
+scenes may run legalize to the full `rounds × iters` budget × swap trials. Accepted as
+a pathological-input cost (the same backstop regime as box over-capacity); noted in §5.
 
 ## Out of scope (deferred to a follow-up issue)
 
@@ -201,13 +234,17 @@ against Makie 0.24 source. `Makie.parent_scene(p)::Scene` reaches the axis scene
 `scene.plots::Vector{Plot}` could be filtered for `Scatter`; default `markersize = 9`
 (`theming.jl`), `markerspace = :pixel` (`basic_plots.jl`). **Disqualifying blocker:**
 `scene.plots` is a plain `Vector{Plot}` mutated by a bare `push!` (`scenes.jl`) — not
-an Observable. The recommended (and hero-example) layering draws `scatter!` *after*
-`textrepel!`; at the moment textrepel's lift first fires the sibling does not exist,
-and nothing retriggers the solve when it is later pushed. Making this work needs a
-defer-to-first-render + scene-poll redesign of the recipe's reactive model. Further
-problems: position→anchor matching ambiguity, `markerspace = :data` / non-disc markers
-having no single radius, and private-API coupling (the risk class the annotation hook
-already guards with a canary). Disproportionate to a clearance knob; filed separately.
+itself an Observable. The recommended (and hero-example) layering draws `scatter!`
+*after* `textrepel!`; at the moment textrepel's lift first fires the sibling does not
+exist. A retrigger hook **does** exist — `events(scene).tick::Observable{Tick}` is a
+per-frame Observable an `on()` callback could use to defer marker discovery to first
+render and re-solve — so the deferral does **not** rest on "no possible trigger."
+Rather, even with the tick hook the approach remains brittle: it forces a
+defer-to-first-render + per-frame scene-poll into the recipe's otherwise-declarative
+reactive model, and still faces position→anchor matching ambiguity, `markerspace =
+:data` / non-disc markers having no single radius, and private-API coupling (the risk
+class the annotation hook already guards with a canary). Disproportionate to a clearance
+knob; filed separately.
 
 ## Affected files
 
@@ -233,17 +270,29 @@ TDD. Run the suite once, tee to `test/output/test-<agent-id>.log`, grep (per CLA
 
 1. **Clearance-floor regression** (`test_projection_solver.jl`): a *feasible*,
    `only_move=:both` fixture with anchors away from viewport edges (so the in-bounds
-   clamp does not fight the keep-out). After a full solve with `residual ≤ 0.5`, assert
-   the floor for every **non-dropped, non-pinned** label `i` × anchor `j` (own + foreign)
-   with a tolerance consistent with legalize's `0.01` px detection — e.g. assert the
-   cheaper-axis center gap `≥ unpadded_half + point_padding − 0.01`, or
-   `!point_covered(anchor_j, unpadded_box_i, point_padding − 0.05)` — **not** a strict
-   `point_covered == false` (which flakes at the tolerance boundary).
-2. **Hero `point_overlaps == 0`** (`test_integration.jl`): the readme dataset with
-   `markersize = 9` yields `solve_stats(...).point_overlaps == 0` (currently 1) **and**
-   `count(dropped) ≤` the current baseline (so it cannot be met by dropping the
-   offender). Name the stat source explicitly (`solve_cluster` + `label_cost` on the
-   hero anchors/sizes).
+   clamp does not fight the keep-out). **TDD-red precondition:** the fixture must be a
+   "legalize-erasure" case — `init`/`side_select` place a clean slot but legalize shoves
+   a box back over a marker — and must be verified **failing against the pre-keep-out
+   solver** (capture the current `point_covered` violation) before the fix; otherwise
+   the test is vacuous (the existing "Q battery" already asserts `point_overlaps == 0`
+   at `point_padding = 2.0` without the keep-out, so a naive fixture would pass today).
+   After a full solve, assert **only the disjunctive predicate**: for every
+   **non-dropped, non-pinned** label `i` × anchor `j` (own + foreign),
+   `!point_covered(anchor_j, unpadded_box_i, point_padding − 0.05)` (the `0.05` eps
+   absorbs legalize's `0.01` detection tol + Float32 noise). **Do not** assert a
+   per-axis center gap — legalize separates on one axis only, so the floor is per-axis
+   disjunctive (see §5), and a center-gap assertion fails on valid layouts.
+2. **Hero `point_overlaps == 0`** (`test_integration.jl`, net-new infrastructure):
+   `examples/readme_example.jl` already seeds its RNG (`Random.seed!(20260527)`), but the
+   dataset is built by an inline loop only inside the example. Extract the hero anchors +
+   labels into a **shared deterministic source** (a seeded constructor function or a
+   committed literal vector) used by both the example and the test, so the test scores
+   the same scene as the hero image. Assert `solve_stats(...).point_overlaps == 0`
+   (currently 1) **and** `count(dropped) ≤ BASELINE` where `BASELINE` is a **frozen
+   integer constant committed in the test with a re-derivation comment** (mirroring
+   `BASELINE_SUM_LEADER` in `test_projection_solver.jl`), so `point_overlaps == 0` cannot
+   be met by dropping the offender. Stat source: `solve_cluster` + `label_cost` on the
+   shared hero anchors/sizes.
 3. **`markersize` attribute** (`test_integration.jl`): `markersize = m ⇒`
    `computed_params.point_padding == m/2 + 0.5`; `markersize` overrides an explicit
    `point_padding`; a `Vector` markersize raises `ArgumentError`. Re-solve test: set
@@ -256,26 +305,47 @@ TDD. Run the suite once, tee to `test/output/test-<agent-id>.log`, grep (per CLA
      and fix the stale `point_padding = 2.0` rationale comment.
    - `test_annotation_algorithm.jl` warm-start invariant — correct the "default
      point_padding = 0" comment (assertion may survive; rationale must reflect 5 px).
+     **Sweep all `TextRepelAlgorithm()` / kwarg-ctor call sites** in that file, re-run
+     under the new `pp = 5.0` ctor default + point-aware legalize, and confirm each
+     inequality/in-bounds assertion still holds.
+   - `test_integration.jl` "connectors suppressed when clamp pins anchor inside its own
+     label" — this fixture's outcome **inverts** under the bump + own-anchor keep-out.
+     The implementer must **re-derive empirically during TDD** whether the 100×80
+     viewport with a ~154 px label is over-capacity (floor waived ⇒ anchor still inside
+     ⇒ suppression preserved) or feasible (anchor pushed clear ⇒ connector now drawn),
+     then update the assertion **and** fix the stale `point_padding = 2.0` rationale
+     comment. Document the decided outcome.
    - Force-solver structural/crossing tests whose non-vacuity depends on seed geometry —
      pin them to an explicit `RepelParams(point_padding=...)` or verify post-change.
      (The ForceSolver default is *unchanged* at 0.0, so most force tests are unaffected;
      this guards the few that read the recipe/shared default.)
 5. **`legalize.jl` soft-node unit tests** (`test_legalize.jl`): (a) a fixed node with
-   **negative** half-extent separates a movable box correctly; (b) a `soft` fixed node's
-   violation is **excluded** from the returned `residual` while still producing the
-   separating push; (c) at `point_padding = 0` (`mc = −box_padding`, `gap =
-   unpadded_half`) a clean Imhof-slot label is returned **bit-identical** (no spurious
-   push), and a label legalized to cover the anchor is pushed back to the unpadded edge.
+   **negative** half-extent separates a movable box correctly; (b) **on the same pair**,
+   force an in-bounds-unsatisfiable soft-marker separation (label clamped to a bound,
+   marker placed so full clearance is impossible): assert the offset **changed** (push
+   fired) **and** the returned `residual ≤ 0.5` (soft pair excluded) — plus a **negative
+   control**: the identical fixture with the node marked non-soft returns `residual > 0.5`
+   (proving the exclusion is what suppresses it); (c) at `point_padding = 0`
+   (`mc = −box_padding`, `gap = unpadded_half`) a clean Imhof-slot label is returned
+   **bit-identical** (no spurious push), and a label legalized to cover the anchor is
+   pushed back to the unpadded edge.
 6. **Warm-start / pinned / axis-lock / over-capacity** (`test_projection_solver.jl`):
    - warm-start: `solve_cluster` with `init_state` placing a label on its own anchor →
      pushed to clear `point_padding`.
    - pinned: a pinned label whose `pinned_offset` covers its own marker is returned
      bit-identically (not pushed, not dropped, no warning).
-   - `only_move = :x` with a foreign marker overlapping only on `y` → graceful
-     (floor waived on the locked axis; no unexpected drop).
-   - over-capacity / corner anchor with in-bounds-unsatisfiable clearance → solve
-     terminates within existing caps, stays label-overlap-free, reports a sane dropped
-     count, and does **not** cascade-drop on the marker residual (validates §1a).
+   - `only_move = :x` with a foreign marker covering the box on **both** axes → assert
+     the floor is achieved on x (`point_covered` false because the box cleared on the
+     unlocked x axis) and **no drop** occurred. (Optionally keep a y-only case labelled
+     as the expected no-op/best-effort path.)
+   - **Anti-cascade differential (validates §1a):** a fixture that drops **zero** labels
+     against the pre-keep-out solver, with a corner anchor whose marker clearance is
+     in-bounds-unsatisfiable, must **still drop zero** with the keep-out — proving the
+     soft nodes never inflate the drop-triggering residual. Assert termination within
+     the existing caps and label-overlap-free output.
+   - **Dropped-anchor keep-out participates:** in an over-capacity scene, a surviving
+     label adjacent to a *dropped* label's anchor still clears that anchor's floor
+     (confirms keep-out nodes cover the full anchor list, not just active labels).
 7. Regenerate `assets/example.png`; eyeball: no marker-occluded labels.
 
 ## Acceptance (from the issue, with scope from §5)
