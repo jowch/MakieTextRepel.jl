@@ -4,7 +4,9 @@
 
 **Goal:** Make the ProjectionSolver optimize the placement quality it already measures — labels dodge scatter markers, prefer readable sides, and end up crossing-free — by enriching `side_select`'s objective into a lexicographic key and adding a swap-based local search that drives crossings to zero.
 
-**Architecture:** Three staged, independently-shippable increments on the existing pure pipeline. Stage 1 adds a shared `point_covered` predicate and folds marker overlaps into a lexicographic side-select key (replacing the weighted scalar) plus a `point_overlaps` Q component. Stage 2 adds a gentle Imhof side-preference to the soft tier of that key. Stage 3 adds a crossing term to the best-of-passes selector and a post-legalize swap-to-fixpoint local search whose accept/reject gate is the read-only `label_cost` Q itself — literally optimizing what we measure.
+**Architecture:** Three staged increments on the existing pure pipeline. Stage 1 adds a shared `point_covered` predicate and folds marker overlaps into a **fully lexicographic, weightless** side-select key `(hard_overlaps, leader)` plus a `point_overlaps` Q component. Stage 2 inserts a `rank` level below `leader` (Imhof readability that never lengthens a leader). Stage 3 inserts a `crossings` level into the global best-of-passes key and adds a post-legalize swap-to-fixpoint local search whose accept/reject gate is the read-only `label_cost` Q — literally optimizing what we measure.
+
+**Staging note:** the three stages are sequential edits to the *same* `side_select` key code (Stage 2 adds `rank`, Stage 3 adds `crossings`), not disjoint regions — each later task re-edits the prior task's `cands`/per-slot/`global_key` blocks. They are independently *shippable* (each compiles and tests green) because the hard lexicographic levels are never disturbed by lower ones; they are not independent *files*. The full objective ends as: per-slot `(ov, leader, rank)`, global `(hard, crossings, leader, rank)`.
 
 **Tech Stack:** Julia 1.11, GeometryBasics (pure layers), Makie 0.24 (recipe/annotation surfaces only), Test + CairoMakie (test target).
 
@@ -142,6 +144,9 @@ end
 @testset "side_select does NOT avoid a label's own anchor" begin
     # A single label: its own anchor is inside/adjacent to its box by construction.
     # The marker term must skip j == i, so a lone label still takes its shortest slot.
+    # For a wider-than-tall label (40×16), the shortest-leader slot is T (leader 10), NOT
+    # TR (leader 24): the key is (overlaps, leader), and leader dominates. T also beats B
+    # (equal leader 10) because cands iterate in IMHOF order (T before B), strict <.
     anchors = [Point2f(200, 200)]
     sizes   = [Vec2f(40, 16)]
     p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
@@ -149,9 +154,8 @@ end
     bounds  = Rect2f(0, 0, 400, 400)
     seed    = [Vec2f(0, 0)]
     sel = side_select(anchors, sizes, ps, bounds, seed, p)
-    # TR slot (shortest-leader, most-preferred) is chosen — own anchor not treated as obstacle
     @test sel[1] == MakieTextRepel._constrain(
-        MakieTextRepel.slot_offset(:TR, sizes[1], p.point_padding), p.only_move)
+        MakieTextRepel.slot_offset(:T, sizes[1], p.point_padding), p.only_move)
 end
 ```
 
@@ -443,18 +447,22 @@ win.
 Add to `test/test_projection_solver.jl` (reuse the fixture shape from the existing
 `:33-42` block — anchors/bounds/sizes per scene):
 
+The battery asserts the absolute invariants (overlaps and markers cleared, post-legalize) AND
+records committed `Σ crossings` / `Σ mean_leader` baselines so a later stage that regresses
+them fails loudly (the spec's aggregate non-regression gate).
+
 ```julia
-@testset "Q battery: marker-free and overlap-free post-legalize" begin
+@testset "Q battery: marker-free, overlap-free post-legalize; crossing/leader baselines" begin
     using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams
     fixtures = [
         ("sparse",  Rect2f(0, 0, 400, 400), [Point2f(80 + 60i, 200 + 20*(-1)^i) for i in 1:4],
                     [Vec2f(50, 18) for _ in 1:4]),
-        ("knot",    Rect2f(0, 0, 300, 300), [Point2f(150 + 4randn_seed(i), 150 + 4randn_seed(i+10)) for i in 1:5],
+        ("knot",    Rect2f(0, 0, 300, 300), [Point2f(150 + 4jitter(i), 150 + 4jitter(i+10)) for i in 1:5],
                     [Vec2f(46, 16) for _ in 1:5]),
         ("collin",  Rect2f(0, 0, 500, 120), [Point2f(60 + 70i, 60) for i in 1:6],
                     [Vec2f(48, 16) for _ in 1:6]),
     ]
-    total_overlaps = 0; total_point = 0
+    total_overlaps = 0; total_point = 0; total_crossings = 0; total_leader = 0.0
     for (name, bounds, anchors, sizes) in fixtures
         params = RepelParams(box_padding = 4.0, point_padding = 2.0, min_segment_length = 4.0)
         offs, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds)
@@ -464,25 +472,34 @@ Add to `test/test_projection_solver.jl` (reuse the fixture shape from the existi
         @test q.overlaps == 0                       # zero-overlap guarantee (feasible fixtures)
         @test q.point_overlaps == 0                 # markers cleared AFTER legalize
         total_overlaps += q.overlaps; total_point += q.point_overlaps
+        total_crossings += q.crossings; total_leader += q.mean_leader
     end
-    @test total_overlaps == 0 && total_point == 0   # aggregate non-regression baseline
+    @test total_overlaps == 0 && total_point == 0   # aggregate hard-term non-regression
+    @test total_crossings == 0                      # crossing baseline (Stage 3 must not regress)
+    # mean_leader baseline: record the observed Σ here on first green run, then assert within
+    # tolerance so Stage 2/3 can shift leaders slightly but a real regression trips the gate.
+    @test total_leader ≤ 1.05 * BASELINE_SUM_LEADER  # set BASELINE_SUM_LEADER from the first run
 end
 ```
 
-If a `randn_seed` helper is not already defined at the top of the file, add a tiny
-deterministic pseudo-noise helper near the top (after the file's leading comment):
+Add the two test-only helpers near the top of the file (after its leading comment) if not
+already present:
 
 ```julia
 # Deterministic per-index jitter (no RNG) so the knot fixture is reproducible.
-randn_seed(i::Int) = Float32(sin(12.9898 * i) * 43758.5453 % 1.0)
+jitter(i::Int) = Float32(sin(12.9898 * i) * 43758.5453 % 1.0)
+# Set on the first green run of the Q battery, then frozen as the leader-length regression gate.
+const BASELINE_SUM_LEADER = 0.0   # ← replace with the observed Σ mean_leader after Step 2
 ```
 
-- [ ] **Step 2: Run to verify it passes (or surfaces a real gap)**
+- [ ] **Step 2: Run to verify it passes (or surfaces a real gap), then freeze the leader baseline**
 
 Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -nA3 "Q battery" test/output/test-objdrive.log`
-Expected: PASS. If `q.point_overlaps > 0` on the `knot` fixture, that is the legalize-erasure
-risk materializing — STOP and escalate to the deferred point-aware-legalize follow-up
-(see spec Non-goals) rather than weakening the assertion.
+First run with `BASELINE_SUM_LEADER = Inf` to read the observed `total_leader`, then set the
+const to that value so the `≤ 1.05·baseline` gate is live. Expected after freezing: PASS. If
+`q.point_overlaps > 0` on the `knot` fixture, that is the legalize-erasure risk materializing —
+STOP and escalate to the deferred point-aware-legalize follow-up (spec Non-goals) rather than
+weakening the assertion.
 
 - [ ] **Step 3: Commit**
 
@@ -495,37 +512,39 @@ git commit -m "test(projection): Q battery — marker-free + overlap-free post-l
 
 # Stage 2 — Side readability
 
-## Task 2.1: Imhof side-preference in the soft tier
+## Task 2.1: Imhof readability as a lexicographic `rank` level
 
-Add `W_side · rank(slot)` to the soft component of `side_select`'s key, where `rank` is the
-slot's index in `IMHOF_ORDER` (TR=0 … TL=7). Lives strictly below `hard_overlaps`, so it
-only decides among equal-overlap slots; a deliberate readability-for-leader trade of up to
-`7·W_side` px.
+Add `rank` (the slot's index in `IMHOF_ORDER`, TR=0 … TL=7) as the **lowest lexicographic
+level**, below `leader`. No weight. Per-slot key becomes `(ov, leader, rank)`; `global_key`
+becomes `(hard, leader_sum, rank_sum)`. Because `rank` sits strictly below `leader`, it never
+lengthens a leader — it only decides among *exactly* equal-leader slots (T vs B, R vs L),
+picking the upper/right one. Honest scope: this mostly formalizes the readability the existing
+`IMHOF_ORDER` iteration already produced, and fixes the global best-of-passes tie case.
 
 **Files:**
-- Modify: `src/side_select.jl` (candidate construction to track rank; per-slot key; `global_key`)
+- Modify: `src/side_select.jl` (candidate construction tracks rank; per-slot key; `global_key`; `sel_rank`)
 - Test: `test/test_side_select.jl`
 
 - [ ] **Step 1: Write the failing test**
 
 ```julia
-@testset "side_select prefers the readable (Imhof) side among equal-overlap slots" begin
-    # A lone label with no conflicts: every in-bounds slot has hard_overlaps = 0, so the
-    # side term decides. The most-preferred slot (TR, rank 0) must win even though several
-    # slots have equal/near-equal leader length.
+@testset "side_select breaks equal-leader ties toward the readable (upper) slot" begin
+    # Lone label 40×16: shortest-leader slots are T and B (leader 10, equal). The rank level
+    # must pick T (rank 2) over B (rank 6). It must NOT pick a corner (TR leader 24) — leader
+    # strictly dominates rank, so readability never lengthens the leader.
     anchors = [Point2f(200, 200)]
     sizes   = [Vec2f(40, 16)]
     p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
     ps      = [sizes[1] .+ 2 * Float32(p.box_padding)]
     bounds  = Rect2f(0, 0, 400, 400)
-    seed    = [Vec2f(-100, -100)]                  # seed nearest to BL, to prove the term overrides the seed
+    seed    = [Vec2f(0, -100)]                       # seed nearest B, to prove rank overrides the seed
     sel = side_select(anchors, sizes, ps, bounds, seed, p)
     @test sel[1] == MakieTextRepel._constrain(
-        MakieTextRepel.slot_offset(:TR, sizes[1], p.point_padding), p.only_move)
+        MakieTextRepel.slot_offset(:T, sizes[1], p.point_padding), p.only_move)
 end
 
 @testset "side_select: readability never overrides overlap avoidance" begin
-    # Head-on conflict: the side term must not pull both labels onto TR and re-create overlap.
+    # Head-on conflict: the rank level must not pull both labels onto the same side and re-overlap.
     anchors = [Point2f(195, 200), Point2f(205, 200)]
     sizes   = [Vec2f(40, 16), Vec2f(40, 16)]
     p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
@@ -534,26 +553,24 @@ end
     seed    = [Vec2f(0, 0), Vec2f(0, 0)]
     sel = side_select(anchors, sizes, ps, bounds, seed, p)
     b1 = box_at(anchors[1], sel[1], ps[1]); b2 = box_at(anchors[2], sel[2], ps[2])
-    @test overlap_push(b1, b2) == Vec2f(0, 0)      # still separated despite the readability pull
+    @test overlap_push(b1, b2) == Vec2f(0, 0)        # still separated despite the readability pull
 end
 ```
 
 - [ ] **Step 2: Run to verify the first test fails**
 
-Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -nA3 "readable (Imhof)" test/output/test-objdrive.log`
-Expected: FAIL — without the side term, the seed-nearest slot (BL) is chosen, not TR.
+Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -nA3 "readable (upper) slot" test/output/test-objdrive.log`
+Expected: FAIL — with only the Stage-1 `(ov, leader)` key, the seed-nearest slot (B) is kept
+(B and T tie on leader, and the seed pulls to B), so `sel[1]` is B, not T.
 
-- [ ] **Step 3: Implement the side term**
+(Note: this task re-edits the same `cands` / per-slot / `global_key` blocks Task 1.2 wrote —
+the stages are sequential on `side_select`, not disjoint code regions. That is by design; the
+*hard* lexicographic levels are unaffected, only the lower levels gain `rank`.)
 
-In `src/side_select.jl`, add the weight constant near the top of the function body (after
-`p = params.point_padding`, line 33):
+- [ ] **Step 3: Implement the rank level**
 
-```julia
-    W_side = 1.5    # px per Imhof rank step; soft readability bias, below all hard terms
-```
-
-Track each candidate slot's rank alongside its offset. Change the candidate build (lines
-41-51) so `cands[i]` is a `Vector{Tuple{Vec2f,Int}}` of `(offset, rank)`:
+Change the candidate build (the Task 1.2 block) so `cands[i]` is a `Vector{Tuple{Vec2f,Int}}`
+of `(offset, rank)`:
 
 ```julia
     cands = Vector{Vector{Tuple{Vec2f,Int}}}(undef, n)
@@ -569,29 +586,15 @@ Track each candidate slot's rank alongside its offset. Change the candidate buil
     end
 ```
 
-Update the seed-nearest initial selection (lines 61-66) to unpack the tuple:
-
-```julia
-            best = cands[i][1][1]; bestd = Inf
-            for (o, _) in cands[i]
-                d = (Float64(o[1]) - seed[i][1])^2 + (Float64(o[2]) - seed[i][2])^2
-                if d < bestd; bestd = d; best = o; end
-            end
-            sel[i] = best
-```
-
-`global_key` must include each label's chosen rank, or the best-of-passes selector ties TR
-against BL (equal leader length) and keeps the seed arrangement instead of the readable one.
-Track a parallel `sel_rank::Vector{Int}` alongside `sel`. Declare it next to `sel` (replacing
-the bare `sel = Vector{Vec2f}(undef, n)` with both):
+Declare `sel_rank` next to `sel`:
 
 ```julia
     sel = Vector{Vec2f}(undef, n)
     sel_rank = zeros(Int, n)            # Imhof rank of each label's currently-selected slot
 ```
 
-In the initial selection loop (lines 57-68), record the chosen slot's rank for non-pinned
-labels (pinned keep rank 0 — their offset is fixed and never re-scored against a slot):
+Initial selection records the chosen slot's rank (pinned keep rank 0 — fixed offset, never
+re-scored):
 
 ```julia
         if isfixed(i)
@@ -606,11 +609,11 @@ labels (pinned keep rank 0 — their offset is fixed and never re-scored against
         end
 ```
 
-In the per-slot greedy loop, iterate `(o, rank)`, fold rank into `soft`, and write back the
+Per-slot greedy: the key is now the 3-tuple `(ov, leader, rank)`; track and write back the
 winning rank:
 
 ```julia
-            besto = sel[i]; bestrank = sel_rank[i]; bestkey = (typemax(Int), Inf)
+            besto = sel[i]; bestrank = sel_rank[i]; bestkey = (typemax(Int), Inf, typemax(Int))
             for (o, rank) in cands[i]
                 b  = box_at(anchors[i], o, psizes[i])
                 bm = box_at(anchors[i], o, sizes[i])
@@ -623,35 +626,56 @@ winning rank:
                 for ob in obstacles
                     (overlap_push(b, ob) != Vec2f(0, 0)) && (ov += 1)
                 end
-                soft = sqrt(Float64(o[1])^2 + Float64(o[2])^2) + W_side * rank
-                key = (ov, soft)
+                key = (ov, sqrt(Float64(o[1])^2 + Float64(o[2])^2), rank)
                 if key < bestkey; bestkey = key; besto = o; bestrank = rank; end
             end
             (besto != sel[i]) && (changed = true)
             sel[i] = besto; sel_rank[i] = bestrank
 ```
 
-Then in `global_key`, fold the selected rank into each label's `soft` contribution (this is
-the same nested closure, so `sel_rank` is captured):
+`global_key` gains `rank_sum` as a new lowest level (Task 1.2's `global_key` returned
+`(hard, leader_sum)`; accumulate `leader` and `rank` separately and return a 3-tuple):
 
 ```julia
-            soft += sqrt(Float64(s[i][1])^2 + Float64(s[i][2])^2) + W_side * sel_rank[i]
+    function global_key(s)
+        hard = 0
+        leader = 0.0
+        ranksum = 0
+        for i in 1:n
+            b   = box_at(anchors[i], s[i], psizes[i])
+            bm  = box_at(anchors[i], s[i], sizes[i])
+            for j in (i+1):n
+                (overlap_push(b, box_at(anchors[j], s[j], psizes[j])) != Vec2f(0, 0)) && (hard += 1)
+            end
+            for ob in obstacles
+                (overlap_push(b, ob) != Vec2f(0, 0)) && (hard += 1)
+            end
+            for j in 1:n
+                j == i && continue
+                point_covered(anchors[j], bm, p) && (hard += 1)
+            end
+            leader += sqrt(Float64(s[i][1])^2 + Float64(s[i][2])^2)
+            ranksum += sel_rank[i]
+        end
+        return (hard, leader, ranksum)
+    end
 ```
+
+(`global_key` is the same nested closure, so it captures `sel_rank`; `best_key`/`gk`
+comparisons via tuple `<` are unchanged.)
 
 - [ ] **Step 4: Run to verify both tests pass**
 
 Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -E "Test Summary|Fail|Error" test/output/test-objdrive.log`
-Expected: PASS, including the head-on test (overlap avoidance still wins) and all prior
-`side_select` tests. The "shortest-leader when unconflicted" test at `:12` may now prefer a
-higher-Imhof slot at equal leader — verify it still holds; if it asserted a specific slot
-that ties on leader, the more-preferred slot is the correct new answer (update that
-assertion to the Imhof-preferred slot if needed, noting why).
+Expected: PASS, including the head-on test (overlap still wins) and all prior `side_select`
+tests. The "shortest-leader when unconflicted" test at `:12` is unaffected — `rank` only
+breaks exact-leader ties, never changes which slot has the shortest leader.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/side_select.jl test/test_side_select.jl
-git commit -m "feat(side_select): gentle Imhof side-preference in the soft tier"
+git commit -m "feat(side_select): Imhof readability as a weightless lexicographic rank level"
 ```
 
 ---
@@ -692,16 +716,25 @@ end
 
 Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -nA3 "crossing-free arrangements" test/output/test-objdrive.log`
 Expected: FAIL — without the crossing level, the selector keeps the crossing seed layout.
+**Verify the fixture actually crosses pre-impl** (print `find_crossings(conns)` on the
+pre-change `side_select` output). Hand-constructed crossings are finicky: symmetric same-y
+anchors tend to resolve to non-crossing axis slots. If it doesn't cross, give the two anchors
+different y values (e.g. `(100,90)` and `(200,110)`) so the seed-forced sides produce an
+angled crossing, and confirm before writing the assertion. Part A only *biases* selection;
+Part B (Task 3.2) is the guaranteed crossing-killer, so this test is the weaker of the two —
+do not over-invest if a robust fresh-solve crossing proves hard to construct.
 
 - [ ] **Step 3: Implement the crossing level**
 
-In `src/side_select.jl`, extend `global_key` to a 3-tuple `(hard, crossings, soft)`. After
-the `hard`/`soft` accumulation, build connectors and count crossings:
+In `src/side_select.jl`, extend `global_key` to the 4-tuple `(hard, crossings, leader, ranksum)`
+— `crossings` is **inserted at level 2**, pushing `leader` and `ranksum` down (so the readable
+ordering hard ≻ crossings ≻ leader ≻ rank holds). Build connectors and count crossings:
 
 ```julia
     function global_key(s)
         hard = 0
-        soft = 0.0
+        leader = 0.0
+        ranksum = 0
         for i in 1:n
             b   = box_at(anchors[i], s[i], psizes[i])
             bm  = box_at(anchors[i], s[i], sizes[i])
@@ -715,18 +748,19 @@ the `hard`/`soft` accumulation, build connectors and count crossings:
                 j == i && continue
                 point_covered(anchors[j], bm, p) && (hard += 1)
             end
-            soft += sqrt(Float64(s[i][1])^2 + Float64(s[i][2])^2) + W_side * sel_rank[i]
+            leader += sqrt(Float64(s[i][1])^2 + Float64(s[i][2])^2)
+            ranksum += sel_rank[i]
         end
         conns = [connector_for(anchors[i], s[i], sizes[i], false, params, params.min_segment_length)
                  for i in 1:n]
         crossings = length(find_crossings(conns))
-        return (hard, crossings, soft)
+        return (hard, crossings, leader, ranksum)
     end
 ```
 
-Julia compares the 3-tuple lexicographically, so `best_key`/`gk` comparisons are unchanged.
+Julia compares the 4-tuple lexicographically, so `best_key`/`gk` comparisons are unchanged.
 `connector_for` and `find_crossings` are in-module; `params` and `params.min_segment_length`
-are in scope.
+are in scope. (Per-slot greedy is untouched — crossings are global-phase only.)
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -745,11 +779,17 @@ git commit -m "feat(side_select): crossing count as lex level 2 in best-of-passe
 ## Task 3.2: Swap-to-fixpoint local search (Part B — the crossing-killer)
 
 Extract the legalize/drop loop into a reusable helper, then run an interleaved
-swap+legalize local search after it: while crossings remain, try swapping each crossing
-pair's offsets, re-legalize, and accept the swap iff the post-legalize `label_cost` Q
-strictly improves lexicographically `(overlaps+point_overlaps, crossings, mean_leader)`.
-Monotone over a well-ordered key ⇒ terminating and deterministic. Capped; `@warn` on
-residual.
+swap+legalize local search after it: while crossings remain, scan all crossing pairs for the
+first swap whose post-legalize `label_cost` Q strictly improves the lexicographic key
+`swapkey = (dropped_count, overlaps+point_overlaps, crossings, mean_leader)`, adopt it, and
+restart the scan. The `dropped_count` top level is a guard: a swap that kills a crossing by
+*dropping a label* strictly raises it and is rejected (we never drop to untangle). Each
+adopted swap strictly decreases `swapkey` over the **finite** set of swap-reachable layouts
+(swap-then-deterministic-legalize is a function of the offset vector), so it terminates — at
+crossing-free or a swap-local fixpoint — within `UNCROSS_ROUNDS`. Deterministic (index-ordered
+scan, no RNG); `@warn` on residual. Note: 2-opt swaps cannot untangle a 3-cycle of crossings,
+so the promise is crossing-free on *swap-reachable* inputs, not unconditional (3-opt is a
+tracked future option).
 
 **Files:**
 - Modify: `src/solvers/projection.jl` (extract helper; insert local search after the loop, before the warn at `:140`)
@@ -757,40 +797,54 @@ residual.
 
 - [ ] **Step 1: Write the failing tests**
 
+The cleanest way to force a *guaranteed* residual crossing into the swap search is the
+**warm-start path** (`init_state`): it legalizes the given layout but does NOT run
+`repair_crossings!` (that's fresh-path only), so a crossing in `init_state` survives to Part B.
+This isolates Part B deterministically — no need to reverse-engineer a fresh-solve that crosses.
+
 ```julia
-@testset "ProjectionSolver: post-legalize swap search reaches zero crossings" begin
-    using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams, connector_for, find_crossings
-    # Layout where the greedy seed crosses but a swap untangles, with room to stay overlap-free.
-    bounds  = Rect2f(0, 0, 400, 200)
-    anchors = [Point2f(120, 100), Point2f(280, 100)]
+@testset "ProjectionSolver: swap search untangles a warm-start crossing" begin
+    using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams
+    bounds  = Rect2f(0, 0, 400, 300)
+    anchors = [Point2f(100, 100), Point2f(200, 100)]
     sizes   = [Vec2f(50, 18), Vec2f(50, 18)]
     params  = RepelParams(box_padding = 4.0, point_padding = 2.0, min_segment_length = 4.0)
-    offs, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds)
-    q = label_cost(anchors, sizes; offsets = offs, bounds = bounds, dropped = dropped,
+    # label 1 (left anchor) placed up-RIGHT, label 2 (right anchor) up-LEFT → leaders cross.
+    # Boxes are 60px apart in x (58px wide padded) so they don't overlap; legalize leaves them,
+    # the crossing persists into Part B, and a single offset swap untangles it.
+    cross_init = [Vec2f(80, 30), Vec2f(-80, 30)]
+    res = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds; init_state = cross_init)
+    q = label_cost(anchors, sizes; offsets = res.offsets, bounds = bounds, dropped = res.dropped,
                    box_padding = params.box_padding, point_padding = params.point_padding,
                    min_segment_length = params.min_segment_length)
-    @test q.crossings == 0
-    @test q.overlaps == 0          # zero-overlap guarantee survives the swap search
+    @test q.crossings == 0          # swap search untangled the warm-start crossing
+    @test q.overlaps == 0           # zero-overlap guarantee survives the swap search
 end
 
-@testset "ProjectionSolver: swap search is deterministic" begin
-    using MakieTextRepel: ProjectionSolver, solve_cluster, RepelParams
+@testset "ProjectionSolver: swap search is deterministic and terminates" begin
+    using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams
     bounds  = Rect2f(0, 0, 400, 400)
     anchors = [Point2f(100 + 7i, 200 + 11*(-1)^i) for i in 1:8]
     sizes   = [Vec2f(44, 16) for _ in 1:8]
     params  = RepelParams(box_padding = 4.0, point_padding = 2.0, min_segment_length = 4.0)
-    a = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds).offsets
+    a = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds).offsets   # returns ⇒ terminated
     b = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds).offsets
     @test a == b
+    # over-capacity warm-start: many crossing labels in tight bounds must still terminate
+    tight = Rect2f(0, 0, 120, 120)
+    init  = [Vec2f(40 * cos(i), 40 * sin(i)) for i in 1:6]
+    r = solve_cluster(ProjectionSolver(params), [Point2f(60, 60) for _ in 1:6],
+                      [Vec2f(40, 16) for _ in 1:6], tight; init_state = init)
+    @test r.offsets isa Vector{Vec2f}            # completed within UNCROSS_ROUNDS, no hang
 end
 ```
 
 - [ ] **Step 2: Run to verify they fail (or that crossings remain)**
 
-Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -nA3 "swap search" test/output/test-objdrive.log`
-Expected: the zero-crossings test FAILs (residual crossing) under the pre-Part-B pipeline.
-(If the fixture happens to be crossing-free already, adjust anchor spacing so the greedy
-seed produces a crossing before implementing — verify by printing `q.crossings` first.)
+Run: `julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee test/output/test-objdrive.log; grep -nA3 "untangles a warm-start" test/output/test-objdrive.log`
+Expected: the untangle test FAILs (`q.crossings == 1`) under the pre-Part-B pipeline — the
+warm-start path legalizes but never repairs the crossing. The determinism/terminates test may
+already pass (it asserts no hang + identical runs), which is fine.
 
 - [ ] **Step 3: Extract `legalize_and_drop` and add the local search**
 
@@ -841,31 +895,34 @@ Then replace the old inline loop with:
 ```julia
     offsets, dropped, lz = legalize_and_drop(offsets)
 
-    # Stage 3 Part B: swap-based local search to drive crossings to zero. Accept a swap iff
-    # the post-legalize Q strictly improves lexicographically (overlaps dominate crossings
-    # dominate leader), so the search is monotone over a well-ordered key — terminating and
-    # deterministic. Capped by UNCROSS_ROUNDS; residual crossings are an honest escape hatch
-    # (crossing-free and overlap-free can genuinely conflict in bounds-tight scenes).
+    # Stage 3 Part B: swap-based local search to drive crossings to zero. Scan all crossing
+    # pairs for the first swap whose post-legalize key strictly improves, adopt it, restart.
+    # swapkey = (dropped_count, overlaps+point_overlaps, crossings, mean_leader): the top
+    # dropped_count level forbids killing a crossing by dropping a label; overlaps dominate
+    # crossings dominate leader. Each adopted swap strictly decreases swapkey over the finite
+    # swap-reachable layout set ⇒ terminates (crossing-free or local fixpoint) within the cap.
+    # Deterministic (index-ordered, no RNG). Residual crossings (conflict, or a 2-opt-resistant
+    # 3-cycle) are an honest escape hatch reported via solve_stats + the @warn below.
     UNCROSS_ROUNDS = 50
-    qkey(offs, drp) = let q = label_cost(anchors, sizes; offsets = offs, bounds = bounds,
-                                         dropped = drp, box_padding = p.box_padding,
-                                         point_padding = p.point_padding,
-                                         min_segment_length = p.min_segment_length)
-        (q.overlaps + q.point_overlaps, q.crossings, q.mean_leader)
+    swapkey(offs, drp) = let q = label_cost(anchors, sizes; offsets = offs, bounds = bounds,
+                                            dropped = drp, box_padding = p.box_padding,
+                                            point_padding = p.point_padding,
+                                            min_segment_length = p.min_segment_length)
+        (count(drp), q.overlaps + q.point_overlaps, q.crossings, q.mean_leader)
     end
     for _ in 1:UNCROSS_ROUNDS
         conns = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], p, p.min_segment_length)
                  for i in 1:n]
         X = find_crossings(conns)
         isempty(X) && break
-        curkey = qkey(offsets, dropped)
+        curkey = swapkey(offsets, dropped)
         improved = false
         for (i, j) in X
             (pin_mask !== nothing && (pin_mask[i] || pin_mask[j])) && continue
             trial = copy(offsets)
             swap_positions!(trial, anchors, i, j)
             toffs, tdrp, tlz = legalize_and_drop(trial)
-            if qkey(toffs, tdrp) < curkey
+            if swapkey(toffs, tdrp) < curkey
                 offsets, dropped, lz = toffs, tdrp, tlz
                 improved = true
                 break
@@ -952,13 +1009,15 @@ git commit -m "test(projection): over-capacity escape hatch; regenerate hero ima
 
 ## Self-review notes (for the implementer)
 
-- **Determinism**: every new term is integer counts or a fixed-`W_side` scalar folded into
-  existing `Float64`/tuple arithmetic; all iteration is index-ordered; the swap search
-  accepts the first improving swap in `find_crossings`'s lex order. No RNG anywhere. The
-  `bounds === nothing` force-solver path is untouched.
+- **Determinism**: every objective level is an integer count or raw leader length, compared
+  via native tuple `<` (no weights anywhere); all iteration is index-ordered; the swap search
+  accepts the first improving swap in `find_crossings`'s lex order. No RNG anywhere (the
+  test-only `jitter` helper is deterministic). The `bounds === nothing` force-solver path is
+  untouched.
 - **Zero-overlap guarantee**: the swap search only ever adopts a `legalize_and_drop` result,
-  and rejects any swap that raises `overlaps` (lex level 1). The final layout is always a
-  legalized one.
+  and `swapkey` rejects any swap that raises `overlaps` *or* the dropped count (both rank above
+  crossings), so a crossing is never traded for an overlap or a silent label drop. The final
+  layout is always a legalized one.
 - **If `point_overlaps > 0` survives Task 1.5**: do not weaken the test. That is the
   legalize-erasure case the spec flags; escalate to point-aware legalize (foreign anchors as
   fixed pseudo-nodes with own-anchor exclusion) as a follow-up before claiming Stage 1 done.
