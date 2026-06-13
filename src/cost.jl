@@ -3,13 +3,15 @@
 """
     label_cost(anchors, sizes; offsets, bounds, dropped=nothing,
                box_padding, point_padding=0.0, min_segment_length)
-        -> (; overlaps::Int, mean_leader::Float32, crossings::Int)
+        -> (; overlaps::Int, point_overlaps::Int, mean_leader::Float32, crossings::Int)
 
 Read-only quality measure of a placement. Never mutates, never feeds back into
-placement. Three independent components (reported separately, never collapsed):
+placement. Four independent components (reported separately, never collapsed):
 
 - `overlaps`  — count of label pairs whose padded boxes penetrate by > 0.5 px on
   both axes (the visual-overlap threshold; sub-0.5 px touches are ignored).
+- `point_overlaps` — count of non-dropped labels covering a non-dropped foreign
+  anchor, via the shared `point_covered`, using `point_padding`.
 - `mean_leader` — mean ‖offset‖ (label displacement) over non-dropped labels
   (0 if none). Note this is offset magnitude, not the padding-trimmed rendered
   leader length.
@@ -41,6 +43,17 @@ function label_cost(anchors::Vector{Point2f}, sizes::Vector{Vec2f};
         (ox > 0.5 && oy > 0.5) && (overlaps += 1)
     end
 
+    point_overlaps = 0
+    for i in 1:n
+        isdrp(i) && continue
+        bm = Rect2f(Point2f(cx[i] - Float64(sizes[i][1]) / 2, cy[i] - Float64(sizes[i][2]) / 2),
+                    Vec2f(sizes[i]))                              # unpadded text box of label i
+        for j in 1:n
+            (j == i || isdrp(j)) && continue
+            point_covered(anchors[j], bm, point_padding) && (point_overlaps += 1)
+        end
+    end
+
     active = [i for i in 1:n if !isdrp(i)]
     mean_leader = isempty(active) ? 0f0 :
         Float32(sum(sqrt(Float64(offsets[i][1])^2 + Float64(offsets[i][2])^2)
@@ -51,5 +64,6 @@ function label_cost(anchors::Vector{Point2f}, sizes::Vector{Vec2f};
                                 params, min_segment_length) for i in 1:n]
     crossings = length(find_crossings(connectors))
 
-    return (; overlaps = overlaps, mean_leader = mean_leader, crossings = crossings)
+    return (; overlaps = overlaps, point_overlaps = point_overlaps,
+              mean_leader = mean_leader, crossings = crossings)
 end
