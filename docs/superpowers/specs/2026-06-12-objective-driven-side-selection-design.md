@@ -55,7 +55,9 @@ objective so it accounts for the same phenomena `cost.jl` reports (**Approach A*
 the discrete objective, keep the deterministic greedy best-of-passes search), **plus a
 scoped piece of Approach B for crossings**: a swap-based local search that iterates to a
 joint overlap-free ∧ crossing-free fixpoint (Stage 3). The local search is confined to the
-offset-swap neighborhood and driven by the same lexicographic objective; full Approach B
+offset-swap neighborhood and gated on its own lexicographic **swap key** (a sibling of the
+side-select key, reconciled to the rank-free `label_cost` Q with a drop-count guard — see
+Stage 3 Part B; the two keys are deliberately distinct). Full Approach B
 (annealing / multi-restart over slot assignments) and Approach C (continuous solver) remain
 out of scope.
 
@@ -268,18 +270,23 @@ never be accepted (it strictly raises `dropped_count`). The soft tail is `mean_l
 not a swap-search one; reconciling the two keeps the swap search reusing the existing Q
 verbatim. (This intentionally differs from the side-select key, which has the rank level.)
 
-**Why this terminates and is deterministic.** "Swap `offsets[i]↔[j]` then run the
-deterministic legalize/drop loop" is a deterministic function of the pre-swap offset vector,
-and swaps only permute a finite set of offset assignments, so the set of layouts reachable by
-swap sequences is **finite**. Each adopted swap strictly decreases `swapkey` (a tuple over
-that finite set), and a strictly-decreasing walk over a finite ordered set cannot revisit a
-layout — so it terminates, at crossing-free or a local fixpoint, within `UNCROSS_ROUNDS`.
-(Termination rests on **finiteness of the swap-reachable layout set**, not on well-ordering of
-the float `mean_leader` — a strictly-decreasing real sequence alone need not be finite.) Note
-legalize re-projects the *whole* active set, so an adopted swap can move non-swapped labels
-too; `swapkey` is therefore a functional of the entire legalized layout, which is exactly what
-the finite-reachable-set argument needs. Pair/scan order is index-sorted, no RNG — determinism
-preserved.
+**Why this terminates and is deterministic.** Termination has two pieces, and the **hard cap
+is the load-bearing one** (not an afterthought). (1) *Backstop:* the loop runs at most
+`UNCROSS_ROUNDS` rounds — it cannot hang regardless of geometry, exactly as `legalize`'s own
+`rounds` cap backstops Dykstra. (2) *Structural progress up to the cap:* every adopted swap
+strictly decreases `swapkey`, whose first three components `(dropped_count, overlaps+
+point_overlaps, crossings)` are non-negative integers. A lexicographic walk can strictly
+decrease this integer prefix only finitely often (it is bounded below by `(0,0,0)`), so the
+search cannot churn indefinitely on *structural* improvement — once the integer prefix is
+fixed, only `mean_leader` (the float tail) can still decrease. We do **not** claim the
+float-only chase is finite on its own (a strictly-decreasing real sequence need not be — this
+is the flaw in the earlier "finite reachable set" framing: `legalize` emits *continuous*
+offsets that the next round re-permutes, so the reachable layout set is **not** finite); the
+`UNCROSS_ROUNDS` cap bounds it. In practice the integer prefix reaches its floor in a handful
+of rounds (one swap on the §tests fixtures), far under the cap. `swapkey`'s `dropped_count` and
+counts are read **after** the candidate's full legalize/drop loop, so they reflect any third
+label legalize had to drop, not just `i`/`j`. Pair/scan order is index-sorted, no RNG —
+determinism preserved.
 
 **The honest caveat (escape hatch).** Two ways the search can stop with residual crossings,
 both reported via `@warn` + `solve_stats.crossings`:
@@ -341,23 +348,24 @@ start; Part B subsumes its role as the closer.
 - **Point-aware `legalize`.** Deferred, but with a concrete trigger (Stage 1's post-legalize
   gate) and a known shape (foreign-anchor pseudo-nodes with own-anchor exclusion — *not* a
   free reuse of the global fixed-node path).
-- **User-facing weight attributes / label priority.** `W_side` is an internal constant; the
-  hard terms have no weights at all. A public tuning API is a separate future feature.
+- **User-facing weight attributes / label priority.** The side-select objective has **no
+  weights at all** — every level is an integer count or raw leader length. A public tuning API
+  is a separate future feature.
 - **Real scan-line VPSC.** Still deferred (unchanged from v0.3).
 - **`markersize`-aware keep-out.** Reuse `point_padding`; the recipe doesn't know the
   scatter's markersize.
 
 ## Build sequence
 
-Three stages, each gated on the multi-fixture Q battery. Land-order-independent for the hard
-(lexicographic) terms; the soft level-3 scalar may shift placements among equal-overlap,
-equal-crossing slots, so re-baseline the *soft* metrics (mean_leader) when Stage 2/3 land —
-expected, not a regression.
+Three stages, each gated on the multi-fixture Q battery. Land-order-independent for the upper
+(integer) lex levels; the lower levels (`leader`, then `rank`) may shift placements among
+equal-overlap, equal-crossing slots, so re-baseline the leader-length metric (`mean_leader`)
+when Stage 2/3 land — expected, not a regression.
 
 1. **Stage 1** — marker avoidance: shared `point_covered` predicate (`geometry.jl`),
    `side_select` marker term, `cost.jl` `point_overlaps`, full `solve_stats` shape change
    (6 sites + 3 docstrings), tests, post-legalize gate. Biggest visible win.
-2. **Stage 2** — side readability (`W_side` rank term in the soft level, tests).
+2. **Stage 2** — side readability (`rank` lexicographic level below `leader`, no weight, tests).
 3. **Stage 3** — crossing term in `global_cost` (Part A, global phase only) + swap-based
    post-legalize local search to a joint overlap-free ∧ crossing-free fixpoint (Part B,
    `UNCROSS_ROUNDS` cap, lex-gated acceptance, escape-hatch `@warn`) + tests.

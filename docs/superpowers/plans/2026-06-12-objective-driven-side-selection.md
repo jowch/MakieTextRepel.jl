@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the ProjectionSolver optimize the placement quality it already measures — labels dodge scatter markers, prefer readable sides, and end up crossing-free — by enriching `side_select`'s objective into a lexicographic key and adding a swap-based local search that drives crossings to zero.
+**Goal:** Make the ProjectionSolver optimize the placement quality it already measures — labels dodge scatter markers, prefer readable sides, and end up crossing-free wherever a swap-reachable crossing-free arrangement exists — by enriching `side_select`'s objective into a lexicographic key and adding a swap-based local search that drives crossings toward zero (2-opt; the rare 3-cycle warns).
 
 **Architecture:** Three staged increments on the existing pure pipeline. Stage 1 adds a shared `point_covered` predicate and folds marker overlaps into a **fully lexicographic, weightless** side-select key `(hard_overlaps, leader)` plus a `point_overlaps` Q component. Stage 2 inserts a `rank` level below `leader` (Imhof readability that never lengthens a leader). Stage 3 inserts a `crossings` level into the global best-of-passes key and adds a post-legalize swap-to-fixpoint local search whose accept/reject gate is the read-only `label_cost` Q — literally optimizing what we measure.
 
@@ -489,7 +489,9 @@ already present:
 # Deterministic per-index jitter (no RNG) so the knot fixture is reproducible.
 jitter(i::Int) = Float32(sin(12.9898 * i) * 43758.5453 % 1.0)
 # Set on the first green run of the Q battery, then frozen as the leader-length regression gate.
-const BASELINE_SUM_LEADER = 0.0   # ← replace with the observed Σ mean_leader after Step 2
+# Starts at Inf so the `≤ 1.05·baseline` gate passes on the first run (where you READ the value);
+# replace with the observed Σ mean_leader (× a little headroom) to arm the gate.
+const BASELINE_SUM_LEADER = Inf   # ← replace with the observed Σ mean_leader after Step 2
 ```
 
 - [ ] **Step 2: Run to verify it passes (or surfaces a real gap), then freeze the leader baseline**
@@ -698,12 +700,16 @@ crossing-free layouts going into legalize. It is NOT added per-slot (would be O(
 @testset "side_select global selection prefers crossing-free arrangements" begin
     # Two labels whose seeds would cross; an equal-overlap (zero) arrangement exists with
     # no crossing. The global key's crossing level must select the crossing-free one.
-    anchors = [Point2f(100, 100), Point2f(200, 100)]
+    # NOTE: anchors are at DIFFERENT y (90 vs 110) so the seed-forced sides produce an
+    # *angled* crossing — symmetric same-y anchors resolve to non-crossing axis slots and the
+    # test would not go red pre-impl (reviewer-flagged). Verify find_crossings is non-empty on
+    # the pre-change side_select output before trusting this assertion.
+    anchors = [Point2f(100, 90), Point2f(200, 110)]
     sizes   = [Vec2f(30, 14), Vec2f(30, 14)]
     p       = RepelParams(box_padding = 2.0, point_padding = 2.0, min_segment_length = 2.0)
     ps      = [sizes[i] .+ 2 * Float32(p.box_padding) for i in 1:2]
     bounds  = Rect2f(0, 0, 300, 300)
-    # seeds deliberately cross: label 1 seeded right, label 2 seeded left
+    # seeds deliberately cross: label 1 (left anchor) seeded right, label 2 (right) seeded left
     seed    = [Vec2f(60, 0), Vec2f(-60, 0)]
     sel = side_select(anchors, sizes, ps, bounds, seed, p)
     conns = [MakieTextRepel.connector_for(anchors[i], sel[i], sizes[i], false, p, p.min_segment_length)
@@ -721,7 +727,7 @@ pre-change `side_select` output). Hand-constructed crossings are finicky: symmet
 anchors tend to resolve to non-crossing axis slots. If it doesn't cross, give the two anchors
 different y values (e.g. `(100,90)` and `(200,110)`) so the seed-forced sides produce an
 angled crossing, and confirm before writing the assertion. Part A only *biases* selection;
-Part B (Task 3.2) is the guaranteed crossing-killer, so this test is the weaker of the two —
+Part B (Task 3.2) is the real crossing-killer (for swap-reachable crossings), so this test is the weaker of the two —
 do not over-invest if a robust fresh-solve crossing proves hard to construct.
 
 - [ ] **Step 3: Implement the crossing level**
