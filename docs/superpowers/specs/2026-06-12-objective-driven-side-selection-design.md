@@ -11,8 +11,16 @@ lexicographic one, scopes the crossing term to the global phase only, enumerates
 
 *Rev. 3 (2026-06-12): Stage 3 escalated from a single capped best-effort re-check to a
 swap-based local search that iterates to a joint (overlap-free ∧ crossing-free) fixpoint —
-a scoped piece of Approach B. Goal is now reliably crossing-free output on feasible inputs,
-with the same over-capacity escape hatch the zero-overlap guarantee carries.*
+a scoped piece of Approach B.*
+
+*Rev. 4 (2026-06-12): after a second three-reviewer pass. Objective is now **fully
+lexicographic with no weights** (the `W_side` px-weight was nearly inert and is replaced by a
+`rank` lex level that never lengthens a leader). Stage 3 Part B's pseudocode is corrected to
+scan all crossing pairs (not just the first), its termination argument is re-grounded on
+finiteness of the swap-reachable layout set (not a false "well-ordered float domain"), its
+accept-key gains a top-level drop-count guard (never drop a label to kill a crossing) and is
+reconciled to the rank-free `label_cost` Q, and the crossing-free promise is scoped to
+**swap-reachable** inputs (2-opt cannot untangle a 3-cycle; 3-opt is a tracked future option).*
 
 ## Where we are (and why this)
 
@@ -51,42 +59,49 @@ offset-swap neighborhood and driven by the same lexicographic objective; full Ap
 (annealing / multi-restart over slot assignments) and Approach C (continuous solver) remain
 out of scope.
 
-## The unified objective — hybrid lexicographic
+## The unified objective — fully lexicographic, no weights
 
 The original draft used a single weighted scalar `W_lap·lap + W_pt·pt + W_x·x + W_side·rank + ‖offset‖`.
-Review showed this is fragile: with `W_x` aggregated over several crossings the scalar
-can let crossings outweigh a real overlap, violating the contract that overlap-avoidance
-must dominate. We therefore split the objective into a **lexicographic key on the hard
-terms** plus a **weighted scalar at the soft bottom**:
+Review showed this is fragile: aggregated crossings could outweigh a real overlap, and the
+`W_side` px-weight was simultaneously "above and below" leader length in the prose. A later
+review round then showed `W_side` as a small additive px term is **nearly inert** — for any
+wider-than-tall label the geometric leader gap between a corner slot (TR) and an axis slot
+(T) dwarfs `7·W_side`, so it can only ever break near-equal-leader ties. So we drop weights
+entirely and make the objective a **pure lexicographic tuple**:
 
 ```
-key(assignment) = ( hard_overlaps,            ← lex level 1 (integer; strict dominance)
-                    crossings,                ← lex level 2 (integer; GLOBAL phase only)
-                    leader + W_side · rank )   ← lex level 3 (soft scalar; the only weight)
+key(assignment) = ( hard_overlaps,   ← level 1 (integer; strict dominance)
+                    crossings,        ← level 2 (integer; GLOBAL phase only)
+                    leader,           ← level 3 (Float; total/own leader length)
+                    rank )            ← level 4 (integer; Imhof readability, pure tiebreak)
 
 where  hard_overlaps = label–label overlap pairs + label–marker point overlaps
+       rank          = Σ IMHOF rank index of each label's slot (TR=0 … TL=7)
 ```
 
-Minimized lexicographically: level 1 before level 2 before level 3. Properties this buys
-(each addresses a specific review finding):
+Compared with Julia's native tuple `<` (lexicographic). Properties:
 
-- **Overlap is never traded for crossings or readability.** `hard_overlaps` is compared
-  first as an integer; no aggregate of lower terms can ever override it. The "never cause
-  a real overlap" contract is now *provable*, not weight-dependent. (Replaces the brittle
-  `W_lap ≫ W_x` magnitude ordering.)
-- **`W_pt = W_lap` (decided) is expressed exactly** by summing label and marker overlaps
-  into the *same* lex level — covering a data point is as bad as covering a label.
-- **Crossings can't outweigh overlaps** (they sit strictly below) and are evaluated only
-  in the global/best-of-passes phase (see below), so the O(n³·8) per-slot trap is avoided.
-- **Only one tunable weight survives — `W_side`** — and it lives at the soft bottom where
-  scale-dependence is acceptable and intended. `W_side ≈ 1.5` px per rank step (ranks 0–7
-  from `IMHOF_ORDER`) means the engine will accept up to `7·1.5 = 10.5` px of extra leader
-  to reach the most-preferred side. This is a *deliberate* readability-for-leader trade, not
-  a pure tiebreak; the prose elsewhere is written to match (no "finest tiebreak" claim).
-- **Stages become genuinely independent.** Adding a lower lex level (crossings in Stage 3)
-  provably cannot change the level-1 (overlap) outcomes that Stage 1 committed, so prior
-  stages' baselines don't get retroactively invalidated by later stages. (The soft level 3
-  *can* shift among equal-overlap, equal-crossing slots — acknowledged in the build sequence.)
+- **Overlap is never traded for anything.** `hard_overlaps` is the integer compared first;
+  no aggregate of lower levels can override it. The "never cause a real overlap" contract is
+  *provable*, not weight-dependent.
+- **`W_pt = W_lap` (decided) is exact** — label and marker overlaps sum into the *same*
+  level-1 integer; covering a data point is as bad as covering a label.
+- **Crossings sit strictly below overlaps** and are evaluated only in the global/best-of-passes
+  phase, so the O(n³·8) per-slot trap is avoided.
+- **Readability never lengthens a leader.** `rank` is level 4, strictly below `leader`, so it
+  only decides among *exactly* equal-leader slots (e.g. T vs B, R vs L, which have identical
+  leader magnitude) — picking the upper/right one. This formalizes and tests the readability
+  preference that the existing `IMHOF_ORDER` iteration order already produced implicitly, and
+  additionally fixes it at the global best-of-passes level (where two equal-leader arrangements
+  differing only in side would otherwise tie and keep whichever was seen first). Its visual
+  effect is deliberately subtle; it costs zero leader length.
+- **Stages stay independent for the hard levels.** Adding a lower level (crossings in Stage 3,
+  rank in Stage 2) provably cannot change a higher level's outcome, so Stage 1's overlap
+  results are never retroactively invalidated. (Lower levels *can* shift placements among
+  ties — acknowledged in the build sequence.)
+
+There are **no tunable weights anywhere** in the side-select objective — every level is an
+integer count or raw leader length.
 
 `cost.jl` stays **multi-component and read-only** — it reports the *raw counts* of the
 same phenomena (`overlaps`, `point_overlaps`, `mean_leader`, `crossings`), never
@@ -112,19 +127,25 @@ honest.
 
 ### Shared point-overlap predicate
 
-A single predicate backs both the engine term and the `cost.jl` count, so the objective
-and the scoreboard never disagree:
+A single predicate backs both the engine term and the `cost.jl` count, so the **new marker
+term** agrees between objective and scoreboard:
 
 ```julia
-# anchor covered by a label box, with point_padding keep-out and the same penetration
-# threshold the rest of the engine uses (cost.jl ignores sub-0.5px touches).
-point_covered(anchor, label_box) :: Bool   # added to src/geometry.jl
+point_covered(p::Point2f, box::Rect2f, padding::Real) :: Bool   # added to src/geometry.jl
 ```
 
-Both `side_select` (Stage 1) and `label_cost` (Stage 1) call this exact function with the
-`point_padding`-expanded label box, using the `>0.5px` inset convention from `cost.jl:41`.
-No `point_in_box` helper exists today (`src/geometry.jl` has `clip_to_box_edge`'s inline
-inside-test only); it is added once and shared.
+True iff `p` lies strictly inside `box` expanded by `padding`. Both `side_select` (Stage 1)
+and `label_cost` (Stage 1) call this exact function with the unpadded text box
+`box_at(anchor, o, sizes[i])` and `padding = point_padding`. No `point_in_box` helper exists
+today (`src/geometry.jl` has only `clip_to_box_edge`'s inline inside-test); it is added once
+and shared.
+
+*Threshold note:* this predicate uses strict containment (penetration > 0), matching
+`side_select`'s existing label–label term (`overlap_push(...) != 0`, also > 0). It does **not**
+match `cost.jl`'s label–label `overlaps`, which ignores sub-`0.5px` touches (`cost.jl:41`).
+That `>0px` vs `>0.5px` divergence on the *label–label* term is pre-existing and out of scope;
+sharing `point_covered` only guarantees the *marker* term agrees between engine and scoreboard,
+which is what matters for "measure = optimize" on the new term.
 
 ## Stage 1 — marker / point avoidance *(biggest visible win, ship first)*
 
@@ -160,7 +181,11 @@ the `label_cost` docstring signature (`cost.jl:4-6`).
 5. `src/annotation_algorithm.jl:33-34, 80` — `solve_stats` docstrings (two spots).
 6. `src/solvers/projection.jl:13-15` — `ProjectionStats` docstring.
 
-New shape: `(; iter, residual, overlaps, point_overlaps, mean_leader, crossings, dropped)`.
+New shape (7 fields). The `ProjectionStats` typed alias is positional, so fix one canonical
+field order and use it at every site — insert `point_overlaps` right after `overlaps`:
+`(:overlaps, :point_overlaps, :mean_leader, :crossings, :iter, :residual, :dropped)`. The
+keyword-constructed literals (`(; overlaps=…, point_overlaps=…, …)`) are order-insensitive,
+but the typed alias and the all-pinned exact-`==` test are not — match the canonical order.
 
 **Tests:**
 - `test/test_side_select.jl` — a label seeded onto a foreign marker re-sides off it; the
@@ -171,16 +196,26 @@ New shape: `(; iter, residual, overlaps, point_overlaps, mean_leader, crossings,
   `:118-119` — update the all-pinned **exact-tuple-equality** assertion to the new shape
   (both are hard failures otherwise).
 
-## Stage 2 — side readability
+## Stage 2 — side readability (pure lexicographic tiebreak)
 
-**`src/side_select.jl`:** add `W_side · rank(slot)` to the soft level-3 scalar
-(`leader + W_side·rank`), where `rank` is the slot's index in `IMHOF_ORDER`
-(`src/init.jl:4`; TR=0 … TL=7). This is a deliberate trade (up to `7·W_side ≈ 10.5` px of
-leader to reach TR), dominated by any level-1 overlap or level-2 crossing by construction.
+**`src/side_select.jl`:** add `rank` as the **lowest lexicographic level** (below `leader`),
+where `rank` is the slot's index in `IMHOF_ORDER` (`src/init.jl:4`; TR=0 … TL=7). No weight.
+Because it sits strictly below `leader`, it decides only among slots with *exactly equal*
+leader length — which is precisely the readable symmetric pairs (T vs B, R vs L, both have
+identical leader magnitude) — picking the upper/right one. It can never lengthen a leader.
 
-**Tests:** among slots with equal `hard_overlaps`, the lower-rank (more-readable) slot wins
-even at a few px more leader; a forced-overlap fixture still re-sides for overlap-avoidance
-despite the readability pull (level 1 dominates level 3).
+*Honest scope:* the existing candidate iteration already runs in `IMHOF_ORDER` with a strict
+`<`, so per-slot exact ties were already broken readably. The real value of making `rank` an
+explicit level is (a) it is now documented and tested rather than an accidental side-effect,
+and (b) it fixes the **global best-of-passes** selection, where two whole arrangements with
+equal `(hard_overlaps, crossings, leader)` but different total rank would otherwise tie and
+keep whichever pass was seen first (which can be the less-readable seed). Visual effect is
+subtle by design.
+
+**Tests:** for a label whose T and B slots both fit and have equal leader, the upper slot (T,
+lower rank) is chosen; readability never overrides overlap-avoidance (a forced-overlap fixture
+still re-sides — level 1 dominates level 4); the rank level never lengthens a leader (a slot
+with a strictly shorter leader is always chosen over a more-readable longer one).
 
 ## Stage 3 — crossing elimination via swap-based local search
 
@@ -204,31 +239,64 @@ crossing-killer. After the legalize/drop loop produces an overlap-free layout, r
 repeat up to UNCROSS_ROUNDS (cap, e.g. 50):
     X = find_crossings(current legalized offsets)
     X is empty  ⇒  break (success: crossing-free ∧ overlap-free)
-    pick the first crossing pair (i, j) in deterministic (index-sorted) order
-    candidate = swap offsets[i] ↔ offsets[j], then re-run the legalize/drop loop
-    accept candidate iff its lexicographic key strictly improves
-        (key = (hard_overlaps, crossings, leader + W_side·Σrank), evaluated post-legalize)
-    no pair yields an improving swap  ⇒  break (local fixpoint)
+    improved = false
+    for each crossing pair (i, j) in X, in index-sorted order:
+        candidate = swap offsets[i] ↔ offsets[j], then re-run the legalize/drop loop
+        if swapkey(candidate) < swapkey(current):       # strict lexicographic improvement
+            adopt candidate; improved = true; break      # restart the outer scan
+    improved == false  ⇒  break (local fixpoint)
 ```
 
-**Why this terminates and is deterministic.** Acceptance is gated on *strict* improvement of
-a lexicographic key over a well-ordered finite domain (integer overlap and crossing counts
-dominate; the soft scalar only tiebreaks), so the accepted-move sequence is strictly
-monotone and cannot cycle — it reaches either crossing-free or a local fixpoint within the
-cap. Candidate evaluation and pair selection are index-ordered with no RNG, preserving the
-determinism contract. Swapping *offsets* (not anchors) keeps every label attached to its own
-anchor; it only changes which slot each occupies.
+The inner loop scans **all** current crossing pairs for the *first* improving swap and
+restarts on success; only a full scan with no improving swap breaks. (An earlier draft picked
+only the first pair, which could spin on a non-improving first pair while a later pair would
+have helped — fixed here.)
 
-**The honest caveat (escape hatch).** A swap that removes a crossing can force an overlap
-that legalize can only clear by going over-capacity (dropping a label) — i.e. crossing-free
-and overlap-free can genuinely conflict in bounds-tight scenes. In that case the lex key does
-**not** improve (overlaps dominate crossings), the swap is rejected, and the search stops at a
-local fixpoint with residual crossings. The solver then `@warn`s and reports the residual
-crossing count, exactly as the zero-overlap guarantee `@warn`s on over-capacity. So the
-promise is **crossing-free output on feasible inputs**, not an unconditional guarantee — the
-same honest shape as the zero-overlap guarantee. The final layout is always the last
-legalize's output, so the **zero-overlap guarantee is unaffected**: when overlap and crossing
-goals conflict, overlap-freeness wins (it's lex level 1).
+**`swapkey` (post-legalize, rank-free).** Reuses the read-only `label_cost` Q, with a
+drop-count guard on top:
+
+```
+swapkey(layout) = ( dropped_count,                  ← never drop a label to fix a crossing
+                    overlaps + point_overlaps,      ← hard overlaps (lex level 1 of the engine)
+                    crossings,
+                    mean_leader )                   ← rank-free: cost.jl is rank-unaware by design
+```
+
+`dropped_count` is the top level so a swap that reduces crossings by *dropping a label* can
+never be accepted (it strictly raises `dropped_count`). The soft tail is `mean_leader` only —
+`cost.jl` does not carry Imhof rank, and the Stage-2 rank tiebreak is a side-selection concern,
+not a swap-search one; reconciling the two keeps the swap search reusing the existing Q
+verbatim. (This intentionally differs from the side-select key, which has the rank level.)
+
+**Why this terminates and is deterministic.** "Swap `offsets[i]↔[j]` then run the
+deterministic legalize/drop loop" is a deterministic function of the pre-swap offset vector,
+and swaps only permute a finite set of offset assignments, so the set of layouts reachable by
+swap sequences is **finite**. Each adopted swap strictly decreases `swapkey` (a tuple over
+that finite set), and a strictly-decreasing walk over a finite ordered set cannot revisit a
+layout — so it terminates, at crossing-free or a local fixpoint, within `UNCROSS_ROUNDS`.
+(Termination rests on **finiteness of the swap-reachable layout set**, not on well-ordering of
+the float `mean_leader` — a strictly-decreasing real sequence alone need not be finite.) Note
+legalize re-projects the *whole* active set, so an adopted swap can move non-swapped labels
+too; `swapkey` is therefore a functional of the entire legalized layout, which is exactly what
+the finite-reachable-set argument needs. Pair/scan order is index-sorted, no RNG — determinism
+preserved.
+
+**The honest caveat (escape hatch).** Two ways the search can stop with residual crossings,
+both reported via `@warn` + `solve_stats.crossings`:
+1. **Conflict.** Removing a crossing forces an overlap that legalize can only clear by dropping
+   a label (over-capacity, bounds-tight). The drop-count guard / overlap level reject such a
+   swap, so overlap-freeness and the no-extra-drop guarantee both win.
+2. **Neighborhood limit.** 2-opt offset swaps untangle any *pairwise*-untangleable crossing,
+   but provably cannot resolve a 3-cycle of mutually-crossing leaders (that needs a 3-way
+   rotation). Such a configuration stalls at a swap-local fixpoint even though a crossing-free
+   arrangement exists in a larger neighborhood.
+
+So the honest promise is **crossing-free whenever a swap-reachable crossing-free arrangement
+exists** — which covers the overwhelming majority of real scatter layouts — not an
+unconditional guarantee. Extending the neighborhood to 3-opt rotations is a tracked future
+option if 2-opt proves insufficient in practice (it has not on the fixtures). The final layout
+is always the last legalize/drop output, so the **zero-overlap guarantee is unaffected**: when
+goals conflict, overlap-freeness (and no extra drops) wins.
 
 `solve_stats.crossings` and `.residual` reflect the post-local-search final layout. The
 existing `repair_crossings!` mid-pipeline pass (pre-legalize) is retained as a cheap warm
@@ -255,10 +323,11 @@ start; Part B subsumes its role as the closer.
   tolerance). Store baseline Q values in the test. The hero PNG stays a human gut-check, not
   the gate. **Measure `point_overlaps` post-legalize** (not just on the discrete output) so
   Stage 1's legalize-erasure risk is actually caught.
-- **Determinism contract preserved.** New terms are integer counts and an integer rank
-  lookup folded into the existing `Float64` arithmetic class (`side_select.jl:107`);
-  iteration stays index-ordered, no RNG. The Stage-3 re-check is gated on a deterministic
-  recount and runs a fixed one cycle. The `bounds === nothing` force path is untouched.
+- **Determinism contract preserved.** Every objective level is an integer count or raw
+  leader length compared via native tuple `<`; iteration stays index-ordered, no RNG. The
+  Stage-3 swap search is gated on a deterministic recount and a deterministic legalize, scans
+  pairs in index order, and is capped by `UNCROSS_ROUNDS`. The `bounds === nothing` force path
+  is untouched.
 - **Zero-overlap guarantee preserved** (see Stage 3).
 - Regenerate `assets/example.png` at the end (`julia --project=. examples/readme_example.jl`).
 
