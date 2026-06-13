@@ -200,16 +200,22 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>"
     # clear them together. (A label wedged BETWEEN its own anchor and a foreign anchor on
     # the locked axis cannot clear both — that is the documented §5 best-effort
     # degradation, and a fixture asserting clearance there is RED forever. Caught in
-    # plan review.) Here own anchor (40) and foreign anchor (50) are both LEFT of the
-    # label's settle point; the label shoots right (Δ20 < the Δ30 of going left) to a
-    # center of 75, span x∈[55,95], so both anchors clear on x.
+    # plan review.) Own anchor (40) and foreign anchor (50) are both LEFT of label 1's
+    # settle point; label 1 shoots right to center 75 (span x∈[55,95]), clearing both.
+    # Label 2 is parked FAR LEFT IN X (Vec2f(-80,0)); only_move=:x preserves that x, so it
+    # never collapses onto / overlaps label 1. This matters: with no label–label push, the
+    # ONLY thing that can move label 1 is the marker keep-out — so the test genuinely
+    # exercises the floor (verified RED against the pre-keep-out solver). Parking label 2
+    # in Y instead (Vec2f(0,-80)) would be zeroed by _constrain(:x) onto label 1 and the
+    # label–label push would clear the markers coincidentally, making the test vacuous —
+    # empirically confirmed in plan-review verification.
     anchors_x = [Point2f(40, 100), Point2f(50, 100)]
     s3 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp,
                                         only_move = :x))
-    res3 = solve_cluster(s3, anchors_x, sizes, bounds; init_state = [Vec2f(15, 0), Vec2f(0, -80)])
+    res3 = solve_cluster(s3, anchors_x, sizes, bounds; init_state = [Vec2f(15, 0), Vec2f(-80, 0)])
     @test count(res3.dropped) == 0
     b1 = box_at(anchors_x[1], res3.offsets[1], sizes[1])
-    @test !point_covered(anchors_x[2], b1, pp - EPS)   # foreign cleared on the unlocked x axis
+    @test !point_covered(anchors_x[2], b1, pp - EPS)   # foreign cleared on the locked x axis
     @test !point_covered(anchors_x[1], b1, pp - EPS)   # own marker cleared too
 end
 ```
