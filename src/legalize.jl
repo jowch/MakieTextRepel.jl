@@ -52,20 +52,23 @@ function dykstra!(pos::Vector{Float64}, cons::Vector{Tuple{Int,Int,Float64}},
 end
 
 """
-    legalize(anchors, offsets, psizes, bounds; fixed, only_move=:both, rounds=400)
+    legalize(anchors, offsets, psizes, bounds; fixed, soft=nothing, only_move=:both, rounds=400)
         -> (; offsets::Vector{Vec2f}, residual::Float32, rounds_used::Int)
 
 Move boxes the minimum distance needed so no two padded boxes overlap. `psizes`
 are padded sizes; box i is centered at `anchors[i] + offsets[i]` with half-extents
 `psizes[i]/2`. `fixed[i]` pins box i (contributes extents, never moves) — obstacle
-pseudo-nodes are passed as fixed entries by the caller. `only_move` restricts
-separation to one axis. `residual` is the max remaining >0.01px penetration after
-the round cap; >0.5 means over-capacity. Offsets of un-moved labels are returned
-bit-identical to the input.
+pseudo-nodes are passed as fixed entries by the caller. `soft[i]` marks a keep-out
+node that participates in projection (it still pushes movable nodes) but is excluded
+from the returned `residual`; used for marker keep-outs whose clearance shortfall
+must not trigger label dropping. `only_move` restricts separation to one axis.
+`residual` is the max remaining >0.01px penetration after the round cap; >0.5 means
+over-capacity. Offsets of un-moved labels are returned bit-identical to the input.
 """
 function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
                   psizes::Vector{Vec2f}, bounds::Rect2f;
-                  fixed::BitVector, only_move::Symbol = :both, rounds::Int = 400)
+                  fixed::BitVector, soft::Union{Nothing,BitVector} = nothing,
+                  only_move::Symbol = :both, rounds::Int = 400)
     n = length(anchors)
     x  = [Float64(anchors[i][1] + offsets[i][1]) for i in 1:n]
     y  = [Float64(anchors[i][2] + offsets[i][2]) for i in 1:n]
@@ -73,6 +76,9 @@ function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
     hw = [Float64(psizes[i][1]) / 2 for i in 1:n]
     hh = [Float64(psizes[i][2]) / 2 for i in 1:n]
     movable = [!fixed[i] for i in 1:n]
+    softmask = soft === nothing ? falses(n) : soft
+    length(softmask) == n || throw(DimensionMismatch(
+        "soft length $(length(softmask)) does not match anchors length $n"))
     blo = bounds.origin; bw = bounds.widths
     xlo_b = Float64(blo[1]); ylo_b = Float64(blo[2])
     xhi_b = Float64(blo[1] + bw[1]); yhi_b = Float64(blo[2] + bw[2])
@@ -125,6 +131,7 @@ function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
     finalpen = 0.0
     for i in 1:n, j in (i+1):n
         (!movable[i] && !movable[j]) && continue
+        (softmask[i] || softmask[j]) && continue      # soft keep-out: pushes, but not counted
         ox = (hw[i] + hw[j]) - abs(x[i] - x[j])
         oy = (hh[i] + hh[j]) - abs(y[i] - y[j])
         (ox > 0.01 && oy > 0.01) && (finalpen = max(finalpen, min(ox, oy)))

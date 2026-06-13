@@ -110,3 +110,41 @@ end
     @test novl(anchors, r.offsets, psizes) == 0       # still overlap-free
     @test r.rounds_used == 0                          # top-of-round clamp confines it → breaks at round 1
 end
+
+@testset "soft keep-out nodes (#21)" begin
+    using MakieTextRepel: legalize
+    bounds = Rect2f(0, 0, 200, 200)
+
+    # (a) A fixed node with NEGATIVE half-extent still separates a movable box.
+    anchors = [Point2f(40, 100), Point2f(60, 100)]
+    offsets = [Vec2f(0, 0), Vec2f(0, 0)]
+    psizes  = [Vec2f(40, 20), Vec2f(2, 2)]      # label vs a tiny (hw=1) fixed node
+    fixed   = BitVector([false, true])
+    r = legalize(anchors, offsets, psizes, bounds; fixed = fixed)
+    c1 = anchors[1][1] + r.offsets[1][1]
+    @test abs(c1 - 60) ≥ 21 - 0.05
+
+    # (b) A SOFT fixed node's residual is excluded, with a non-soft negative control.
+    # only_move=:x + right-bound clamp ⇒ separation is genuinely unsatisfiable in-bounds
+    # (the label cannot escape on y). Without the lock the label slides down on y and
+    # residual→0, making the control vacuous — caught in plan review.
+    bsm     = Rect2f(0, 0, 100, 200)
+    anc     = [Point2f(95, 100), Point2f(70, 100)]
+    off     = [Vec2f(0, 0), Vec2f(0, 0)]
+    psz     = [Vec2f(40, 20), Vec2f(40, 20)]
+    fx      = BitVector([false, true])
+    rsoft   = legalize(anc, off, psz, bsm; fixed = fx, soft = BitVector([false, true]),
+                       only_move = :x)
+    rhard   = legalize(anc, off, psz, bsm; fixed = fx, only_move = :x)  # soft = none
+    @test rsoft.offsets[1] != Vec2f(0, 0)        # push still fired
+    @test rsoft.residual ≤ 0.5f0                 # soft pair excluded from residual
+    @test rhard.residual > 0.5f0                 # negative control: counted when not soft
+
+    # (c) point_padding=0 ⇒ mc=-box_padding ⇒ gap=unpadded_half: clean slot bit-identical.
+    anc2 = [Point2f(40, 100), Point2f(40, 100)]
+    off2 = [Vec2f(20, 0), Vec2f(0, 0)]
+    psz2 = [Vec2f(48, 28), Vec2f(-8, -8)]         # mc=-4 ⇒ width 2*mc = -8
+    fx2  = BitVector([false, true])
+    r2   = legalize(anc2, off2, psz2, bounds; fixed = fx2, soft = BitVector([false, true]))
+    @test r2.offsets[1] == Vec2f(20, 0)           # bit-identical: no push
+end
