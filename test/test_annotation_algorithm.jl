@@ -696,3 +696,11 @@ end
     @test offsets[2] == Vec2f(3, -4)
     @test solve_stats(alg).iter == 0     # bypass: solver never ran
 end
+
+@testset "TextRepelAlgorithm default point_padding = 5.0 (#21)" begin
+    alg = TextRepelAlgorithm()
+    @test alg.params.point_padding == 5.0
+    # explicit override still works
+    alg2 = TextRepelAlgorithm(; point_padding = 1.5)
+    @test alg2.params.point_padding == 1.5
+end
