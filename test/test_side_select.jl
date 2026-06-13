@@ -108,8 +108,8 @@ end
     # A single label: its own anchor is inside/adjacent to its box by construction.
     # The marker term must skip j == i, so a lone label still takes its shortest slot.
     # For a wider-than-tall label (40×16), the shortest-leader slot is T (leader 10), NOT
-    # TR (leader 24): the key is (overlaps, leader), and leader dominates. T also beats B
-    # (equal leader 10) because cands iterate in IMHOF order (T before B), strict <.
+    # TR (leader 24): the key is (overlaps, leader, rank), and leader dominates. T beats B
+    # (equal leader 10) via the rank tiebreak: T has rank 2, B has rank 6.
     anchors = [Point2f(200, 200)]
     sizes   = [Vec2f(40, 16)]
     p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
@@ -119,4 +119,32 @@ end
     sel = side_select(anchors, sizes, ps, bounds, seed, p)
     @test sel[1] == MakieTextRepel._constrain(
         MakieTextRepel.slot_offset(:T, sizes[1], p.point_padding), p.only_move)
+end
+
+@testset "side_select breaks equal-leader ties toward the readable (upper) slot" begin
+    # Lone label 40×16: shortest-leader slots are T and B (leader 10, equal). The rank level
+    # must pick T (rank 2) over B (rank 6). It must NOT pick a corner (TR leader 24) — leader
+    # strictly dominates rank, so readability never lengthens the leader.
+    anchors = [Point2f(200, 200)]
+    sizes   = [Vec2f(40, 16)]
+    p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
+    ps      = [sizes[1] .+ 2 * Float32(p.box_padding)]
+    bounds  = Rect2f(0, 0, 400, 400)
+    seed    = [Vec2f(0, -100)]                       # seed nearest B, to prove rank overrides the seed
+    sel = side_select(anchors, sizes, ps, bounds, seed, p)
+    @test sel[1] == MakieTextRepel._constrain(
+        MakieTextRepel.slot_offset(:T, sizes[1], p.point_padding), p.only_move)
+end
+
+@testset "side_select: readability never overrides overlap avoidance" begin
+    # Head-on conflict: the rank level must not pull both labels onto the same side and re-overlap.
+    anchors = [Point2f(195, 200), Point2f(205, 200)]
+    sizes   = [Vec2f(40, 16), Vec2f(40, 16)]
+    p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
+    ps      = [sizes[i] .+ 2 * Float32(p.box_padding) for i in 1:2]
+    bounds  = Rect2f(0, 0, 400, 400)
+    seed    = [Vec2f(0, 0), Vec2f(0, 0)]
+    sel = side_select(anchors, sizes, ps, bounds, seed, p)
+    b1 = box_at(anchors[1], sel[1], ps[1]); b2 = box_at(anchors[2], sel[2], ps[2])
+    @test overlap_push(b1, b2) == Vec2f(0, 0)        # still separated despite the readability pull
 end
