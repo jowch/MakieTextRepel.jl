@@ -43,3 +43,19 @@ using Test
                     box_padding = bp, min_segment_length = 0.5)
     @test qc.crossings == 1
 end
+
+@testset "label_cost point_overlaps" begin
+    # Two anchors 30px apart on x. Label 1 (wide) at offset 0 covers anchor 2.
+    anchors = [Point2f(100, 100), Point2f(130, 100)]
+    sizes   = [Vec2f(80, 20), Vec2f(10, 10)]
+    offs    = [Vec2f(0, 0), Vec2f(0, 40)]      # label 1 centered on its anchor → covers anchor 2
+    bounds  = Rect2f(0, 0, 400, 400)
+    q = label_cost(anchors, sizes; offsets = offs, bounds = bounds,
+                   box_padding = 0.0, point_padding = 2.0, min_segment_length = 4.0)
+    @test q.point_overlaps == 1                # anchor 2 sits under label 1's box
+    # move label 1 far up so it no longer covers anchor 2
+    offs2 = [Vec2f(0, 80), Vec2f(0, 40)]
+    q2 = label_cost(anchors, sizes; offsets = offs2, bounds = bounds,
+                    box_padding = 0.0, point_padding = 2.0, min_segment_length = 4.0)
+    @test q2.point_overlaps == 0
+end

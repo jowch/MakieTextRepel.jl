@@ -50,7 +50,7 @@ end
     s = solve_stats(alg)
     @test s isa NamedTuple
     @test Set(propertynames(s)) ==
-          Set((:iter, :residual, :overlaps, :mean_leader, :crossings, :dropped))
+          Set((:iter, :residual, :overlaps, :point_overlaps, :mean_leader, :crossings, :dropped))
     @test s.iter == 0
     @test s.residual === 0f0
 end
@@ -115,8 +115,8 @@ end
         @test offsets[i][1] ≈ 10f0
         @test offsets[i][2] ≈ 20f0
     end
-    @test solve_stats(alg) == (; overlaps = 0, mean_leader = 0f0, crossings = 0,
-                                 iter = 0, residual = 0f0, dropped = 0)
+    @test solve_stats(alg) == (; overlaps = 0, point_overlaps = 0, mean_leader = 0f0,
+                                 crossings = 0, iter = 0, residual = 0f0, dropped = 0)
 end
 
 @testset "dispatch — per-label pinning (mixed mode)" begin
@@ -211,7 +211,7 @@ end
 
     @test offsets_left[1] != offsets_center[1]
     # Sanity: centered solve moves the bbox off the anchor to an Imhof slot
-    # (shorter leader under v0.3).
+    # (shorter leader under ProjectionSolver).
     @test norm(offsets_center[1]) > 0
 end
 
@@ -275,7 +275,7 @@ end
     # After equilibrium under reset=true the anchor must not lie strictly
     # inside each label's bbox; a subsequent reset=false solve should
     # maintain that invariant — warm-start mustn't degenerate the layout.
-    # v0.3 note: ProjectionSolver places labels tangent to the anchor with
+    # Note: ProjectionSolver places labels tangent to the anchor with
     # the default point_padding = 0 (the anchor may sit exactly ON the box
     # edge; the connector is then suppressed by min_segment_length), so the
     # invariant is "anchor is not strictly INSIDE the box interior."
