@@ -220,3 +220,17 @@ end
                       [Vec2f(40, 16) for _ in 1:6], tight; init_state = init)
     @test r.offsets isa Vector{Vec2f}            # completed within UNCROSS_ROUNDS, no hang
 end
+
+@testset "ProjectionSolver: over-capacity scene stops at a fixpoint, stays overlap-free" begin
+    using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams
+    bounds  = Rect2f(0, 0, 80, 80)                 # tiny bounds, 8 coincident anchors
+    anchors = [Point2f(40, 40) for _ in 1:8]
+    sizes   = [Vec2f(30, 14) for _ in 1:8]
+    params  = RepelParams(box_padding = 4.0, point_padding = 2.0, min_segment_length = 4.0)
+    res = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds)
+    q = label_cost(anchors, sizes; offsets = res.offsets, bounds = bounds, dropped = res.dropped,
+                   box_padding = params.box_padding, point_padding = params.point_padding,
+                   min_segment_length = params.min_segment_length)
+    @test q.overlaps == 0                          # survivors overlap-free (zero-overlap wins conflicts)
+    @test any(res.dropped)                         # over-capacity ⇒ at least one drop, no hang
+end
