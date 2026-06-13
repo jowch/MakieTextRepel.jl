@@ -256,3 +256,37 @@ end
     # not collapsed onto the same offset.
     @test anchors[1] .+ offs[1] != anchors[2] .+ offs[2]
 end
+
+@testset "markersize attribute + default point_padding (#21)" begin
+    using CairoMakie
+    xs = [0.0, 1.0, 2.0]; ys = [0.0, 1.0, 0.5]
+    labels = ["a", "b", "c"]
+
+    # Default point_padding is now 5.0 on the recipe surface.
+    fig = Figure(); ax = Axis(fig[1, 1])
+    p = textrepel!(ax, xs, ys; text = labels)
+    Makie.update_state_before_display!(fig)
+    @test p.computed_params[].point_padding == 5.0
+
+    # markersize sets effective point_padding = m/2 + 0.5.
+    fig2 = Figure(); ax2 = Axis(fig2[1, 1])
+    p2 = textrepel!(ax2, xs, ys; text = labels, markersize = 9)
+    Makie.update_state_before_display!(fig2)
+    @test p2.computed_params[].point_padding == 9 / 2 + 0.5   # == 5.0
+
+    # markersize OVERRIDES an explicit point_padding.
+    fig3 = Figure(); ax3 = Axis(fig3[1, 1])
+    p3 = textrepel!(ax3, xs, ys; text = labels, markersize = 20, point_padding = 99.0)
+    Makie.update_state_before_display!(fig3)
+    @test p3.computed_params[].point_padding == 20 / 2 + 0.5  # markersize wins
+
+    # A Vector markersize raises a clear error. The validation lives in the solve lift,
+    # which this Makie/ComputePipeline version evaluates eagerly at plot-connect time,
+    # so the ArgumentError surfaces from the textrepel! call itself.
+    fig4 = Figure(); ax4 = Axis(fig4[1, 1])
+    @test_throws Exception begin
+        p4 = textrepel!(ax4, xs, ys; text = labels, markersize = [9, 9, 9])
+        Makie.update_state_before_display!(fig4)
+        p4.computed_params[]      # force the lift to run ⇒ ArgumentError propagates
+    end
+end

@@ -19,8 +19,10 @@
     # ── Spacing / dropping ──
     "Pixels of padding around each label box for the solver."
     box_padding = 4.0
-    "Pixel halo around each data point — used both by the solver (repulsion halo) and by the connector layer (gap between the marker and the start of the leader line)."
-    point_padding = 2.0
+    "Pixel marker-clearance: minimum gap from every scatter marker to the nearest label text edge, enforced after legalize (own and foreign markers). Also the connector anchor-end trim. Set to `marker_radius + small_gap`, or use `markersize`. (Under the in-tree ForceSolver it is the point-repulsion halo radius.)"
+    point_padding = 5.0
+    "Size of the SIBLING scatter marker, if any. `textrepel!` draws NO markers itself; this only tells the solver how much to clear. When set (scalar), overrides `point_padding` with `markersize/2 + 0.5`. Assumes a disc marker in `markerspace = :pixel` (the scatter default); for other markers set `point_padding` directly. `nothing` = use `point_padding`."
+    markersize = nothing
     "Drop labels overlapping more than this many others (Inf = keep all). Inert under the default ProjectionSolver (no force loop / zero-overlap guarantee); affects only the in-tree ForceSolver."
     max_overlaps = Inf
 
@@ -73,16 +75,25 @@ function Makie.plot!(p::TextRepel)
     # 2. Measure + solve. Recomputes when anchors/text/font/size or params change.
     solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
                   p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
-                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs, p.min_segment_length) do px, labels, fs, font,
+                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs, p.min_segment_length, p.markersize) do px, labels, fs, font,
                                                                                                        fr, frp, fpl, mi, om,
-                                                                                                       bp, pp, mo, bnds, ml
+                                                                                                       bp, pp, mo, bnds, ml, ms
         anchors = [Point2f(q[1], q[2]) for q in px]
         sizes = measure_labels(labels, font, fs, 1.0)
+        # markersize (sibling scatter) overrides point_padding when set. textrepel!
+        # draws no markers; this only declares the sibling size for clearance.
+        eff_pp = if ms === nothing
+            Float64(pp)
+        elseif ms isa Real
+            Float64(ms) / 2 + 0.5
+        else
+            throw(ArgumentError("textrepel!: `markersize` must be a scalar Real or nothing; got $(typeof(ms)). Per-point marker sizes are not supported — set `point_padding` directly."))
+        end
         params = RepelParams(; force = Tuple(Float64.(fr)),
                                force_point = Tuple(Float64.(frp)),
                                force_pull = Tuple(Float64.(fpl)),
                                max_iter = Int(mi), only_move = Symbol(om),
-                               box_padding = Float64(bp), point_padding = Float64(pp),
+                               box_padding = Float64(bp), point_padding = eff_pp,
                                max_overlaps = Float64(mo), bounds = bnds,
                                min_segment_length = Float64(ml))
         # `bounds_obs` (lines 69-71) always yields a Rect2f, so `bnds` is never
