@@ -136,7 +136,7 @@ within_bounds(pos::Point2f, vp::Rect2f) =
     vp.origin[1] <= pos[1] <= vp.origin[1] + vp.widths[1] &&
     vp.origin[2] <= pos[2] <= vp.origin[2] + vp.widths[2]
 
-@testset "v0.2 pipeline invariants" begin
+@testset "pipeline invariants" begin
     # Three case fixtures spanning sparsity regimes.
     cases = [
         (name = "sparse",
@@ -173,13 +173,13 @@ within_bounds(pos::Point2f, vp::Rect2f) =
             vp = params.bounds
             @test all(isfinite, offsets)
             @test all(i -> dropped[i] || within_bounds(anchors[i] + offsets[i], vp), eachindex(offsets))
-            # v0.3 HARD guarantee: zero box overlap under ProjectionSolver.
+            # HARD guarantee: zero box overlap under ProjectionSolver.
             q = label_cost(anchors, sizes; offsets = offsets, bounds = vp, dropped = dropped,
                            box_padding = params.box_padding,
                            point_padding = params.point_padding,
                            min_segment_length = min_len)
             @test q.overlaps == 0
-            # Crossings are best-effort in v0.3 (repair precedes the final legalize):
+            # Crossings are best-effort under ProjectionSolver (repair precedes the final legalize):
             # assert no worse than the ForceSolver baseline on the same scene.
             rf = solve_cluster(ForceSolver(params), anchors, sizes, vp)
             force_conn = [connector_for(anchors[i], rf.offsets[i], sizes[i], rf.dropped[i], params, min_len)
@@ -189,7 +189,7 @@ within_bounds(pos::Point2f, vp::Rect2f) =
     end
 end
 
-@testset "v0.2 max_overlaps interaction" begin
+@testset "max_overlaps interaction" begin
     # Crowded layout: 6 long labels packed into a tiny viewport. With a 150×150 px
     # figure and limits spanning 0.4–0.6, the axis-scene is only ~90 px wide while
     # each label measures ~70 px — well over half the viewport. The solver can't

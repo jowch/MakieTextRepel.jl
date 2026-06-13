@@ -24,7 +24,7 @@ reconciled to the rank-free `label_cost` Q, and the crossing-free promise is sco
 
 ## Where we are (and why this)
 
-The v0.3 `ProjectionSolver` (`side-select → repair → legalize → drop`) gives a
+The current `ProjectionSolver` (`side-select → repair → legalize → drop`) gives a
 deterministic, zero-overlap placement. But three gaps limit the *quality* of that
 placement, all traceable to one root cause: **the cost functional `Q` we measure is
 disconnected from the objective the engine steers by.**
@@ -351,7 +351,7 @@ start; Part B subsumes its role as the closer.
 - **User-facing weight attributes / label priority.** The side-select objective has **no
   weights at all** — every level is an integer count or raw leader length. A public tuning API
   is a separate future feature.
-- **Real scan-line VPSC.** Still deferred (unchanged from v0.3).
+- **Real scan-line VPSC.** Still deferred (unchanged).
 - **`markersize`-aware keep-out.** Reuse `point_padding`; the recipe doesn't know the
   scatter's markersize.
 

@@ -1,4 +1,4 @@
-# solvers/abstract.jl — Internal cluster-solver interface (v0.3 candidate for export).
+# solvers/abstract.jl — Internal cluster-solver interface (candidate for export, issue #8).
 
 """
 Marker type for cluster placement solvers. A concrete subtype owns the **entire**
@@ -11,7 +11,7 @@ placement strategy and implements
 
 `init_state === nothing` ⇒ fresh placement (the solver does its own init + crossing
 repair); a given `init_state` ⇒ relax (warm-start, solve only). Callers must NOT
-perform init/placement/repair outside `solve_cluster`. Internal in v0.2; exposed
+perform init/placement/repair outside `solve_cluster`. Internal for now; exposed
 publicly when a second implementation lands (see GitHub issue #8).
 """
 abstract type AbstractClusterSolver end
