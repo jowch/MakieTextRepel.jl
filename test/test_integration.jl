@@ -90,13 +90,16 @@ end
 
 @testset "connectors suppressed when clamp pins anchor inside its own label" begin
     # Tiny viewport (100×80) + wide label anchored at the data midpoint: the
-    # label box (≈154 px wide) is wider than the axis viewport (≈43 px), so the
-    # clamp pins it to the lower edge while the anchor, projecting to pixel
-    # (≈2, ≈1), sits strictly inside the clamped box. The connector layer's
-    # strict-inside check (clip_to_box_edge → nothing) suppresses the segment.
-    # Locks the post-Task-4 behavior; relies on the bumped default
-    # point_padding = 2.0 to ensure the clamped box is large enough to contain
-    # the anchor.
+    # label box (≈154 px wide) is over 3× wider than the axis viewport
+    # (≈43 px). This is an OVER-CAPACITY scene for the 5px marker-clearance
+    # floor (#21): there is no in-bounds placement that clears the anchor, so
+    # the floor is waived and the clamp simply confines the oversized box to
+    # bounds. The anchor, projecting to pixel (≈2, ≈1), ends up strictly inside
+    # the clamped box (verified: box origin ≈(-111, 0.7), widths ≈(154, 24)).
+    # The connector layer's strict-inside check (clip_to_box_edge → nothing)
+    # then suppresses the segment. Survives the point_padding default bump
+    # 2.0→5.0 precisely because the scene is too small for the new floor to
+    # push the anchor clear — not because of any particular box size.
     fig = Figure(size = (100, 80)); ax = Axis(fig[1, 1])
     pts = Point2f[(0.5, 0.5)]
     pl = textrepel!(ax, pts; text = ["a-very-wide-label-name"],
