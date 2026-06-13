@@ -290,3 +290,42 @@ end
         p4.computed_params[]      # force the lift to run ⇒ ArgumentError propagates
     end
 end
+
+@testset "hero dataset geometry: no marker occlusion (#21)" begin
+    using CairoMakie
+    using Random              # Random.seed!, randn (global RNG)
+    using MakieTextRepel: label_cost
+
+    function hero_dataset()
+        Random.seed!(20260527)
+        knot_centers = [(-0.7, 0.55), (0.75, -0.45), (0.05, 0.9)]
+        knot_counts  = [3, 3, 2]
+        xs = Float64[]; ys = Float64[]
+        for (c, k) in zip(knot_centers, knot_counts), _ in 1:k
+            push!(xs, c[1] + 0.03 * randn()); push!(ys, c[2] + 0.03 * randn())
+        end
+        for _ in 1:14
+            push!(xs, 0.85 * randn()); push!(ys, 0.85 * randn())
+        end
+        labels = ["node $(i)" for i in 1:length(xs)]
+        return xs, ys, labels
+    end
+
+    xs, ys, labels = hero_dataset()
+    fig = Figure(size = (400, 400)); ax = Axis(fig[1, 1])
+    p = textrepel!(ax, xs, ys; text = labels, fontsize = 13, markersize = 9)
+    Makie.update_state_before_display!(fig)
+    stats_dropped = count(p.computed_dropped[])
+    anchors = p.computed_anchors[]; sizes = p.computed_sizes[]
+    offsets = p.computed_offsets[]; dropped = p.computed_dropped[]
+    bnds = p.computed_params[].bounds
+    q = label_cost(anchors, sizes; offsets = offsets, bounds = bnds, dropped = dropped,
+                   box_padding = 4.0, point_padding = 9 / 2 + 0.5,
+                   min_segment_length = 2.0)
+    @test q.point_overlaps == 0
+
+    # Drop baseline: frozen so point_overlaps==0 cannot be met by dropping the
+    # occluding label. Set to the observed count(dropped) on first green run.
+    HERO_DROP_BASELINE = 1   # observed 2026-06-13
+    @test stats_dropped ≤ HERO_DROP_BASELINE
+end

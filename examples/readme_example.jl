@@ -6,27 +6,28 @@
 using CairoMakie, MakieTextRepel
 using Random
 
-Random.seed!(20260527)
-
 # A few small "knots" of near-coincident points plus a scattered field. The knots
 # make naive placement collide; the resolvers fan them out with leader lines while
 # the sparse singles stay readable. Small knots (2-3 pts) keep the leaders tidy.
-knot_centers = [(-0.7, 0.55), (0.75, -0.45), (0.05, 0.9)]
-knot_counts  = [3, 3, 2]
-xs = Float64[]
-ys = Float64[]
-for (c, k) in zip(knot_centers, knot_counts)
-    for _ in 1:k
-        push!(xs, c[1] + 0.03 * randn())
-        push!(ys, c[2] + 0.03 * randn())
+# Seeds the GLOBAL RNG and draws x-then-y per point so the points — and the
+# committed hero image — stay byte-identical. test/test_integration.jl reconstructs
+# this dataset verbatim (it must NOT include this file).
+function hero_dataset()
+    Random.seed!(20260527)
+    knot_centers = [(-0.7, 0.55), (0.75, -0.45), (0.05, 0.9)]
+    knot_counts  = [3, 3, 2]
+    xs = Float64[]; ys = Float64[]
+    for (c, k) in zip(knot_centers, knot_counts), _ in 1:k
+        push!(xs, c[1] + 0.03 * randn()); push!(ys, c[2] + 0.03 * randn())
     end
+    for _ in 1:14
+        push!(xs, 0.85 * randn()); push!(ys, 0.85 * randn())
+    end
+    labels = ["node $(i)" for i in 1:length(xs)]
+    return xs, ys, labels
 end
-for _ in 1:14                       # scattered singles filling the field
-    push!(xs, 0.85 * randn())
-    push!(ys, 0.85 * randn())
-end
-n = length(xs)                      # 3 + 3 + 2 + 14 = 22
-labels = ["node $(i)" for i in 1:n]
+
+xs, ys, labels = hero_dataset()     # 3 + 3 + 2 + 14 = 22 points
 points = Point2f.(xs, ys)
 
 fig = Figure(size = (1200, 400), fontsize = 15)
@@ -39,7 +40,7 @@ text!(ax1, xs, ys; text = labels, align = (:left, :bottom), fontsize = 13)
 # Middle: textrepel!. Draw the labels (and connectors) first, then the scatter on
 # top, so the leader lines tuck underneath the markers.
 ax2 = Axis(fig[1, 2]; title = "textrepel! (resolved)", aspect = 1)
-textrepel!(ax2, xs, ys; text = labels, fontsize = 13)
+textrepel!(ax2, xs, ys; text = labels, fontsize = 13, markersize = 9)
 scatter!(ax2, xs, ys; color = :tomato, markersize = 9)
 
 # Right: the same solver, plugged into Makie.annotation! via the algorithm hook —
@@ -49,7 +50,7 @@ ax3 = Axis(fig[1, 3]; title = "annotation! + TextRepelAlgorithm", aspect = 1)
 scatter!(ax3, xs, ys; color = :tomato, markersize = 9)
 annotation!(ax3, points; text = labels, fontsize = 13,
             style = Makie.Ann.Styles.Line(),
-            algorithm = TextRepelAlgorithm())
+            algorithm = TextRepelAlgorithm(; point_padding = 9 / 2 + 0.5))
 
 mkpath(joinpath(@__DIR__, "..", "assets"))
 out = joinpath(@__DIR__, "..", "assets", "example.png")
