@@ -278,3 +278,50 @@ end
     @test !point_covered(anchors_x[2], b1, pp - EPS)   # foreign cleared on locked x axis
     @test !point_covered(anchors_x[1], b1, pp - EPS)   # own marker cleared too
 end
+
+@testset "marker keep-out: anti-cascade + coverage (#21)" begin
+    using MakieTextRepel: ProjectionSolver, RepelParams, solve_cluster, point_covered, box_at
+    bounds = Rect2f(0, 0, 200, 200)
+
+    # --- Warm-start: a label on its own anchor is pushed off (own-marker floor) ---
+    anchors = [Point2f(100, 100)]
+    sizes   = [Vec2f(40, 20)]
+    pp = 5.0
+    s = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp))
+    res = solve_cluster(s, anchors, sizes, bounds; init_state = [Vec2f(0, 0)])
+    b = box_at(anchors[1], res.offsets[1], sizes[1])
+    @test !point_covered(anchors[1], b, pp - 0.05)     # pushed clear of own marker
+    @test res.dropped[1] == false
+
+    # --- Anti-cascade: marker-clearance that is in-bounds-UNSATISFIABLE must NOT drop a
+    # label (soft nodes excluded from the drop-triggering residual, §1a). Lock to y in a
+    # SHORT viewport so neither label can clear its own marker; labels far apart in x ⇒
+    # honest baseline drop count is 0. A regression that let soft count toward residual
+    # would drop a label here.
+    short  = Rect2f(0, 0, 200, 40)               # height 40; hh=10 ⇒ center y∈[10,30]
+    anchors2 = [Point2f(50, 20), Point2f(150, 20)]
+    sizes2   = [Vec2f(40, 20), Vec2f(40, 20)]
+    s2 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = 15.0,
+                                        only_move = :y))
+    res2 = solve_cluster(s2, anchors2, sizes2, short)
+    @test count(res2.dropped) == 0      # soft residual excluded ⇒ no cascade drop
+    bb1 = box_at(anchors2[1], res2.offsets[1], sizes2[1] .+ 8)
+    bb2 = box_at(anchors2[2], res2.offsets[2], sizes2[2] .+ 8)
+    @test MakieTextRepel.overlap_push(bb1, bb2) == Vec2f(0, 0)   # no label-label overlap
+
+    # --- Dropped-anchor keep-out participates: survivors clear foreign anchors (incl.
+    # a dropped label's anchor) in an over-capacity scene; best-effort escape allowed. ---
+    anchors3 = [Point2f(100, 100), Point2f(105, 100), Point2f(110, 100)]
+    sizes3   = [Vec2f(60, 30), Vec2f(60, 30), Vec2f(60, 30)]
+    small    = Rect2f(0, 0, 80, 80)     # too small for 3 big labels → at least one drops
+    s3 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = 5.0))
+    res3 = solve_cluster(s3, anchors3, sizes3, small)
+    for i in eachindex(anchors3)
+        res3.dropped[i] && continue
+        bi = box_at(anchors3[i], res3.offsets[i], sizes3[i])
+        for j in eachindex(anchors3)
+            j == i && continue
+            @test !point_covered(anchors3[j], bi, 5.0 - 0.05) || res3.residual > 0.5f0
+        end
+    end
+end
