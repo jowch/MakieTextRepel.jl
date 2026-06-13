@@ -9,6 +9,11 @@ crossings folded into one objective, staged for incremental landing.*
 lexicographic one, scopes the crossing term to the global phase only, enumerates all
 `solve_stats` sites, and strengthens the acceptance gate to a multi-fixture battery.*
 
+*Rev. 3 (2026-06-12): Stage 3 escalated from a single capped best-effort re-check to a
+swap-based local search that iterates to a joint (overlap-free ∧ crossing-free) fixpoint —
+a scoped piece of Approach B. Goal is now reliably crossing-free output on feasible inputs,
+with the same over-capacity escape hatch the zero-overlap guarantee carries.*
+
 ## Where we are (and why this)
 
 The v0.3 `ProjectionSolver` (`side-select → repair → legalize → drop`) gives a
@@ -38,10 +43,13 @@ Concretely this produces three visible defects on the clustered-knots hero examp
 ## Goal
 
 Reconnect measurement and optimization by enriching the **discrete** `side_select`
-objective so it accounts for the same phenomena `cost.jl` reports. This is **Approach A**
-(enrich the discrete objective, keep the deterministic greedy best-of-passes search).
-No continuous solver, no annealing — those (Approach B/C) are out of scope and only
-justified if A leaves visible failures.
+objective so it accounts for the same phenomena `cost.jl` reports (**Approach A** — enrich
+the discrete objective, keep the deterministic greedy best-of-passes search), **plus a
+scoped piece of Approach B for crossings**: a swap-based local search that iterates to a
+joint overlap-free ∧ crossing-free fixpoint (Stage 3). The local search is confined to the
+offset-swap neighborhood and driven by the same lexicographic objective; full Approach B
+(annealing / multi-restart over slot assignments) and Approach C (continuous solver) remain
+out of scope.
 
 ## The unified objective — hybrid lexicographic
 
@@ -174,35 +182,68 @@ leader to reach TR), dominated by any level-1 overlap or level-2 crossing by con
 even at a few px more leader; a forced-overlap fixture still re-sides for overlap-avoidance
 despite the readability pull (level 1 dominates level 3).
 
-## Stage 3 — crossing penalty + capped post-legalize re-check
+## Stage 3 — crossing elimination via swap-based local search
 
-**Discrete penalty (`src/side_select.jl`):** add the arrangement's crossing count as lex
-**level 2** in `global_cost` **only** (the best-of-passes selector), via `connector_for` +
-`find_crossings`. It is **not** added to the per-slot greedy loop — doing so would rebuild
+Two parts: a cheap global-phase term that *prefers* crossing-free arrangements going into
+legalize, and a post-legalize **local search** that actively drives crossings to zero.
+
+**Part A — discrete penalty (`src/side_select.jl`):** add the arrangement's crossing count
+as lex **level 2** in `global_cost` **only** (the best-of-passes selector), via `connector_for`
++ `find_crossings`. It is **not** added to the per-slot greedy loop — doing so would rebuild
 the global connector set inside `passes · n · 8` slot trials (O(n³·8)) to compute a property
 that only ranks whole-arrangement snapshots. So its influence is real but bounded: it
 re-ranks the ≤`passes` snapshots, not individual greedy moves. (`connector_for`/`find_crossings`
-are in-module; `side_select` already has `anchors`, `sizes`, `params` in scope.)
+are in-module; `side_select` already has `anchors`, `sizes`, `params` in scope.) This gives
+the local search (Part B) a good starting point but is not where crossings are eliminated.
 
-**Post-legalize re-check (`src/solvers/projection.jl`):** *best-effort, capped — not a
-guarantee.* After the legalize/drop loop, recount crossings on the final offsets. If any are
-present and look reducible:
-1. Run **one** bounded `repair_crossings!` 2-opt swap pass on the legalized layout.
-2. Re-run the legalize loop **once** and let its `lz` (residual/rounds) **replace** the prior
-   `lz`, so the over-capacity warn (`projection.jl:140`) and `solve_stats` reflect the *final*
-   layout.
-3. Accept the residual; `@warn` if crossings remain.
+**Part B — post-legalize swap-to-fixpoint (`src/solvers/projection.jl`):** the real
+crossing-killer. After the legalize/drop loop produces an overlap-free layout, run an
+**interleaved swap+legalize local search** to a joint fixpoint:
 
-The hard cap of **one** cycle bounds work and prevents ping-pong, but does **not** guarantee
-zero crossings — `legalize` is crossing-unaware and step 2 can re-slide a swapped label across
-a neighbor's leader. The honest framing (matching `repair_crossings!`'s own cap-and-warn) is
-"fewer crossings, best-effort," not "kill crossings." The **zero-overlap guarantee survives**
-because the cycle ends with a `legalize` call whose residual feeds the same drop/warn path.
+```
+repeat up to UNCROSS_ROUNDS (cap, e.g. 50):
+    X = find_crossings(current legalized offsets)
+    X is empty  ⇒  break (success: crossing-free ∧ overlap-free)
+    pick the first crossing pair (i, j) in deterministic (index-sorted) order
+    candidate = swap offsets[i] ↔ offsets[j], then re-run the legalize/drop loop
+    accept candidate iff its lexicographic key strictly improves
+        (key = (hard_overlaps, crossings, leader + W_side·Σrank), evaluated post-legalize)
+    no pair yields an improving swap  ⇒  break (local fixpoint)
+```
 
-**Tests (`test/test_projection_solver.jl`):** an arrangement with an avoidable crossing is
-selected crossing-free by the global term; a fixture where legalize reintroduces a crossing
-triggers exactly one re-check (cap respected, no loop); `solve_stats.residual` reflects the
-post-re-check legalize; determinism preserved.
+**Why this terminates and is deterministic.** Acceptance is gated on *strict* improvement of
+a lexicographic key over a well-ordered finite domain (integer overlap and crossing counts
+dominate; the soft scalar only tiebreaks), so the accepted-move sequence is strictly
+monotone and cannot cycle — it reaches either crossing-free or a local fixpoint within the
+cap. Candidate evaluation and pair selection are index-ordered with no RNG, preserving the
+determinism contract. Swapping *offsets* (not anchors) keeps every label attached to its own
+anchor; it only changes which slot each occupies.
+
+**The honest caveat (escape hatch).** A swap that removes a crossing can force an overlap
+that legalize can only clear by going over-capacity (dropping a label) — i.e. crossing-free
+and overlap-free can genuinely conflict in bounds-tight scenes. In that case the lex key does
+**not** improve (overlaps dominate crossings), the swap is rejected, and the search stops at a
+local fixpoint with residual crossings. The solver then `@warn`s and reports the residual
+crossing count, exactly as the zero-overlap guarantee `@warn`s on over-capacity. So the
+promise is **crossing-free output on feasible inputs**, not an unconditional guarantee — the
+same honest shape as the zero-overlap guarantee. The final layout is always the last
+legalize's output, so the **zero-overlap guarantee is unaffected**: when overlap and crossing
+goals conflict, overlap-freeness wins (it's lex level 1).
+
+`solve_stats.crossings` and `.residual` reflect the post-local-search final layout. The
+existing `repair_crossings!` mid-pipeline pass (pre-legalize) is retained as a cheap warm
+start; Part B subsumes its role as the closer.
+
+**Tests (`test/test_projection_solver.jl`):**
+- A fixture with an avoidable crossing converges to **zero** crossings (not merely "fewer").
+- A fixture where the greedy seed crosses but a single swap untangles: assert crossing-free
+  output and that overlaps stayed at zero.
+- Determinism: identical input → identical offsets across runs.
+- Termination: the search respects `UNCROSS_ROUNDS` and never loops (assert rounds-used ≤ cap
+  on a stress fixture).
+- Escape hatch: a deliberately over-capacity / crossing-vs-overlap-conflicting fixture stops
+  at a local fixpoint, drops/over-capacity behavior unchanged, and `@warn`s rather than
+  hanging or violating zero-overlap.
 
 ## Measurement & guardrails
 
@@ -223,8 +264,11 @@ post-re-check legalize; determinism preserved.
 
 ## Non-goals (out of scope)
 
-- **Approach B (annealing/multi-restart) and Approach C (continuous solver).** Greedy
-  best-of-passes stays; only escalate if A leaves visible failures.
+- **Full Approach B (annealing / multi-restart over slot assignments) and Approach C
+  (continuous solver).** The greedy best-of-passes side-selection stays. *Exception:* Stage 3
+  uses a **scoped** piece of Approach B — a swap-neighborhood local search for crossing
+  elimination (above). The broader slot-assignment search space and stochastic methods remain
+  out; only escalate further if this leaves visible failures.
 - **Point-aware `legalize`.** Deferred, but with a concrete trigger (Stage 1's post-legalize
   gate) and a known shape (foreign-anchor pseudo-nodes with own-anchor exclusion — *not* a
   free reuse of the global fixed-node path).
@@ -245,6 +289,7 @@ expected, not a regression.
    `side_select` marker term, `cost.jl` `point_overlaps`, full `solve_stats` shape change
    (6 sites + 3 docstrings), tests, post-legalize gate. Biggest visible win.
 2. **Stage 2** — side readability (`W_side` rank term in the soft level, tests).
-3. **Stage 3** — crossing term in `global_cost` (global phase only) + capped post-legalize
-   re-check + tests.
+3. **Stage 3** — crossing term in `global_cost` (Part A, global phase only) + swap-based
+   post-legalize local search to a joint overlap-free ∧ crossing-free fixpoint (Part B,
+   `UNCROSS_ROUNDS` cap, lex-gated acceptance, escape-hatch `@warn`) + tests.
 4. Regenerate `assets/example.png`; final full-suite run.
