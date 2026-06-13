@@ -102,39 +102,77 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
         end
     end
 
-    dropped = falses(n)
-    local lz = (; offsets = offsets, residual = 0f0, rounds_used = 0)
-    while true
-        # working arrays = active (non-dropped) labels ∪ obstacle pseudo-nodes (all fixed)
-        act = Int[i for i in 1:n if !dropped[i]]
-        m = length(act); k = length(obstacles)
-        w_anchors = Vector{Point2f}(undef, m + k)
-        w_offsets = Vector{Vec2f}(undef, m + k)
-        w_psizes  = Vector{Vec2f}(undef, m + k)
-        w_fixed   = falses(m + k)
-        for (t, i) in enumerate(act)
-            w_anchors[t] = anchors[i]; w_offsets[t] = offsets[i]; w_psizes[t] = psizes[i]
-            (pin_mask !== nothing && pin_mask[i]) && (w_fixed[t] = true)
+    # Run the legalize → over-capacity-drop loop to convergence on a *given* offsets vector.
+    # Returns (offsets, dropped, lz). Pure w.r.t. its inputs (mutates only locals).
+    function legalize_and_drop(start_offsets::Vector{Vec2f})
+        offs = copy(start_offsets)
+        drp  = falses(n)
+        local lz = (; offsets = offs, residual = 0f0, rounds_used = 0)
+        while true
+            act = Int[i for i in 1:n if !drp[i]]
+            m = length(act); k = length(obstacles)
+            w_anchors = Vector{Point2f}(undef, m + k)
+            w_offsets = Vector{Vec2f}(undef, m + k)
+            w_psizes  = Vector{Vec2f}(undef, m + k)
+            w_fixed   = falses(m + k)
+            for (t, i) in enumerate(act)
+                w_anchors[t] = anchors[i]; w_offsets[t] = offs[i]; w_psizes[t] = psizes[i]
+                (pin_mask !== nothing && pin_mask[i]) && (w_fixed[t] = true)
+            end
+            for (t, ob) in enumerate(obstacles)
+                w_anchors[m + t] = Point2f(ob.origin .+ ob.widths ./ 2)
+                w_offsets[m + t] = Vec2f(0, 0)
+                w_psizes[m + t]  = Vec2f(ob.widths)
+                w_fixed[m + t]   = true
+            end
+            lz = legalize(w_anchors, w_offsets, w_psizes, bounds;
+                          fixed = w_fixed, only_move = p.only_move)
+            for (t, i) in enumerate(act)
+                offs[i] = lz.offsets[t]
+            end
+            (lz.residual ≤ 0.5f0 || count(!, drp) ≤ 1) && break
+            idx = drop_most_overlapped!(drp, anchors, offs, psizes, pin_mask, obstacles)
+            idx == 0 && break
         end
-        for (t, ob) in enumerate(obstacles)
-            w_anchors[m + t] = Point2f(ob.origin .+ ob.widths ./ 2)
-            w_offsets[m + t] = Vec2f(0, 0)
-            w_psizes[m + t]  = Vec2f(ob.widths)
-            w_fixed[m + t]   = true
+        return (offs, drp, lz)
+    end
+
+    offsets, dropped, lz = legalize_and_drop(offsets)
+
+    # Stage 3 Part B: swap-based local search to drive crossings to zero. Scan all crossing
+    # pairs for the first swap whose post-legalize key strictly improves, adopt it, restart.
+    # swapkey = (dropped_count, overlaps+point_overlaps, crossings, mean_leader): the top
+    # dropped_count level forbids killing a crossing by dropping a label; overlaps dominate
+    # crossings dominate leader. Each adopted swap strictly decreases swapkey over the finite
+    # swap-reachable layout set ⇒ terminates (crossing-free or local fixpoint) within the cap.
+    # Deterministic (index-ordered, no RNG). Residual crossings (conflict, or a 2-opt-resistant
+    # 3-cycle) are an honest escape hatch reported via solve_stats + the @warn below.
+    UNCROSS_ROUNDS = 50
+    swapkey(offs, drp) = let q = label_cost(anchors, sizes; offsets = offs, bounds = bounds,
+                                            dropped = drp, box_padding = p.box_padding,
+                                            point_padding = p.point_padding,
+                                            min_segment_length = p.min_segment_length)
+        (count(drp), q.overlaps + q.point_overlaps, q.crossings, q.mean_leader)
+    end
+    for _ in 1:UNCROSS_ROUNDS
+        conns = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], p, p.min_segment_length)
+                 for i in 1:n]
+        X = find_crossings(conns)
+        isempty(X) && break
+        curkey = swapkey(offsets, dropped)
+        improved = false
+        for (i, j) in X
+            (pin_mask !== nothing && (pin_mask[i] || pin_mask[j])) && continue
+            trial = copy(offsets)
+            swap_positions!(trial, anchors, i, j)
+            toffs, tdrp, tlz = legalize_and_drop(trial)
+            if swapkey(toffs, tdrp) < curkey
+                offsets, dropped, lz = toffs, tdrp, tlz
+                improved = true
+                break
+            end
         end
-        lz = legalize(w_anchors, w_offsets, w_psizes, bounds;
-                      fixed = w_fixed, only_move = p.only_move)
-        # Only active labels are written back; dropped labels keep their last pre-drop
-        # position (filtered by `dropped` everywhere downstream).
-        for (t, i) in enumerate(act)
-            offsets[i] = lz.offsets[t]
-        end
-        (lz.residual ≤ 0.5f0 || count(!, dropped) ≤ 1) && break
-        idx = drop_most_overlapped!(dropped, anchors, offsets, psizes, pin_mask, obstacles)
-        # idx == 0: no label is *eligible* to drop (all remaining survivors pinned) —
-        # distinct from the one-survivor case already caught by `count(!, dropped) ≤ 1`
-        # in the break condition above. Stop here; the residual warn below still fires.
-        idx == 0 && break
+        improved || break
     end
 
     if lz.residual > 0.5f0

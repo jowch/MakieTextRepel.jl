@@ -185,3 +185,38 @@ end
     @test total_crossings == 0                      # crossing baseline (Stage 3 must not regress)
     @test total_leader ≤ 1.05 * BASELINE_SUM_LEADER  # leader-length regression gate
 end
+
+@testset "ProjectionSolver: swap search untangles a warm-start crossing" begin
+    using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams
+    bounds  = Rect2f(0, 0, 400, 300)
+    anchors = [Point2f(100, 100), Point2f(200, 100)]
+    sizes   = [Vec2f(50, 18), Vec2f(50, 18)]
+    params  = RepelParams(box_padding = 4.0, point_padding = 2.0, min_segment_length = 4.0)
+    # label 1 (left anchor) placed up-RIGHT, label 2 (right anchor) up-LEFT → leaders cross.
+    # Boxes are 60px apart in x (58px wide padded) so they don't overlap; legalize leaves them,
+    # the crossing persists into Part B, and a single offset swap untangles it.
+    cross_init = [Vec2f(80, 30), Vec2f(-80, 30)]
+    res = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds; init_state = cross_init)
+    q = label_cost(anchors, sizes; offsets = res.offsets, bounds = bounds, dropped = res.dropped,
+                   box_padding = params.box_padding, point_padding = params.point_padding,
+                   min_segment_length = params.min_segment_length)
+    @test q.crossings == 0          # swap search untangled the warm-start crossing
+    @test q.overlaps == 0           # zero-overlap guarantee survives the swap search
+end
+
+@testset "ProjectionSolver: swap search is deterministic and terminates" begin
+    using MakieTextRepel: ProjectionSolver, solve_cluster, label_cost, RepelParams
+    bounds  = Rect2f(0, 0, 400, 400)
+    anchors = [Point2f(100 + 7i, 200 + 11*(-1)^i) for i in 1:8]
+    sizes   = [Vec2f(44, 16) for _ in 1:8]
+    params  = RepelParams(box_padding = 4.0, point_padding = 2.0, min_segment_length = 4.0)
+    a = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds).offsets   # returns ⇒ terminated
+    b = solve_cluster(ProjectionSolver(params), anchors, sizes, bounds).offsets
+    @test a == b
+    # over-capacity warm-start: many crossing labels in tight bounds must still terminate
+    tight = Rect2f(0, 0, 120, 120)
+    init  = [Vec2f(40 * cos(i), 40 * sin(i)) for i in 1:6]
+    r = solve_cluster(ProjectionSolver(params), [Point2f(60, 60) for _ in 1:6],
+                      [Vec2f(40, 16) for _ in 1:6], tight; init_state = init)
+    @test r.offsets isa Vector{Vec2f}            # completed within UNCROSS_ROUNDS, no hang
+end
