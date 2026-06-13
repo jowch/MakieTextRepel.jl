@@ -138,6 +138,9 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
     end
 
     offsets, dropped, lz = legalize_and_drop(offsets)
+    total_rounds = lz.rounds_used   # accumulates legalize rounds across the swap search too,
+                                    # so reported `iter` reflects the whole solve, not just the
+                                    # final accepted swap's legalize pass.
 
     # Stage 3 Part B: swap-based local search to drive crossings to zero. Scan all crossing
     # pairs for the first swap whose post-legalize key strictly improves, adopt it, restart.
@@ -168,6 +171,7 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
             toffs, tdrp, tlz = legalize_and_drop(trial)
             if swapkey(toffs, tdrp) < curkey
                 offsets, dropped, lz = toffs, tdrp, tlz
+                total_rounds += tlz.rounds_used
                 improved = true
                 break
             end
@@ -184,6 +188,6 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
                    min_segment_length = p.min_segment_length)
     s.stats[] = (; overlaps = q.overlaps, point_overlaps = q.point_overlaps,
                    mean_leader = q.mean_leader, crossings = q.crossings,
-                   iter = lz.rounds_used, residual = lz.residual, dropped = count(dropped))
-    return (; offsets = offsets, dropped = dropped, iter = lz.rounds_used, residual = lz.residual)
+                   iter = total_rounds, residual = lz.residual, dropped = count(dropped))
+    return (; offsets = offsets, dropped = dropped, iter = total_rounds, residual = lz.residual)
 end

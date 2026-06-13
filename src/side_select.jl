@@ -81,7 +81,11 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
     # globally monotone and can 2-cycle, so we keep the best arrangement seen across passes
     # rather than trusting the last pass. Obstacle overlaps are counted once per
     # (label, obstacle) pair, consistent with the greedy `ov` below.
-    function global_key(s)
+    # Scores a full arrangement `s` with its per-label slot ranks `s_rank`. Takes `s_rank`
+    # explicitly (rather than capturing the outer `sel_rank`) so it is an honest function of
+    # its arguments — every level is derived from `(s, s_rank)`, never from mutable closure
+    # state that may diverge from `s`.
+    function global_key(s, s_rank)
         hard = 0
         leader = 0.0
         ranksum = 0
@@ -99,12 +103,12 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
                 point_covered(anchors[j], bm, p) && (hard += 1)
             end
             leader += sqrt(Float64(s[i][1])^2 + Float64(s[i][2])^2)
-            ranksum += sel_rank[i]
+            ranksum += s_rank[i]
         end
         return (hard, leader, ranksum)
     end
 
-    best_sel = copy(sel); best_key = global_key(sel)
+    best_sel = copy(sel); best_key = global_key(sel, sel_rank)
     for _ in 1:passes
         changed = false
         for i in 1:n
@@ -128,7 +132,7 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
             (besto != sel[i]) && (changed = true)
             sel[i] = besto; sel_rank[i] = bestrank
         end
-        gk = global_key(sel)
+        gk = global_key(sel, sel_rank)
         if gk < best_key; best_key = gk; best_sel = copy(sel); end
         changed || break
     end
