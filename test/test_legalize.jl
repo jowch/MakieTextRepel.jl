@@ -115,7 +115,8 @@ end
     using MakieTextRepel: legalize
     bounds = Rect2f(0, 0, 200, 200)
 
-    # (a) A fixed node with NEGATIVE half-extent still separates a movable box.
+    # (a) A tiny fixed node (hw=1) still separates a movable box (negative-half-extent
+    #     keep-out is exercised in case (c) below).
     anchors = [Point2f(40, 100), Point2f(60, 100)]
     offsets = [Vec2f(0, 0), Vec2f(0, 0)]
     psizes  = [Vec2f(40, 20), Vec2f(2, 2)]      # label vs a tiny (hw=1) fixed node
