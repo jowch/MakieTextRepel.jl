@@ -45,6 +45,20 @@ function point_push(box::Rect2f, p::Point2f, padding::Float32)
 end
 
 """
+True iff point `p` lies strictly inside `box` expanded by `padding` on every side.
+Strict inequalities (a point on the expanded edge is not covered) match the
+`clip_to_box_edge` convention. Shared by `side_select`'s marker-avoidance term and
+`label_cost`'s `point_overlaps` count, so the engine objective and the Q scoreboard
+count the same events.
+"""
+function point_covered(p::Point2f, box::Rect2f, padding::Real)
+    pad = Float32(padding)
+    lo = box.origin .- pad
+    hi = box.origin .+ box.widths .+ pad
+    return p[1] > lo[1] && p[1] < hi[1] && p[2] > lo[2] && p[2] < hi[2]
+end
+
+"""
 Point on the boundary of `box` along the ray from the box center toward `target`
 (ggrepel-style connector attachment). Returns `nothing` when `target` lies
 strictly inside the box on both axes — no clean segment can be drawn. A target

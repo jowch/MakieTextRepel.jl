@@ -47,6 +47,21 @@ end
     @test clamp_box_offset(Rect2f(20, 10, 200, 20), bounds) ≈ Vec2f(-20, 0)
 end
 
+@testset "point_covered" begin
+    using MakieTextRepel: point_covered, box_at
+    box = box_at(Point2f(0, 0), Vec2f(0, 0), Vec2f(10, 10))  # [-5,5]×[-5,5]
+    # strictly inside → covered (no padding)
+    @test point_covered(Point2f(0, 0), box, 0.0)
+    # outside the bare box but inside the padded halo → covered
+    @test point_covered(Point2f(6, 0), box, 2.0)        # x=6 < 5+2
+    @test !point_covered(Point2f(8, 0), box, 2.0)       # x=8 > 5+2
+    # exactly on the expanded edge → NOT covered (strict, matches clip_to_box_edge)
+    @test !point_covered(Point2f(7, 0), box, 2.0)       # x == 5+2
+    # corner halo respected on both axes
+    @test point_covered(Point2f(6, 6), box, 2.0)
+    @test !point_covered(Point2f(6, 8), box, 2.0)
+end
+
 @testset "clip_to_box_edge: inside-box and boundary" begin
     box = box_at(Point2f(0, 0), Vec2f(0, 0), Vec2f(4, 4))   # box: x ∈ [-2, 2], y ∈ [-2, 2]
 
