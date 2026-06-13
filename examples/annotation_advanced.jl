@@ -25,6 +25,9 @@ ax1 = Axis(fig[1, 1]; title = "pin one label, auto-place the rest", axkw...)
 scatter!(ax1, points; markersize = 10, color = :tomato)
 offs = fill(Vec2f(NaN, NaN), length(points))
 offs[1] = Vec2f(48, 34)            # pin "alpha" 48 px right, 34 px up of its point
+# labelspace = :relative_pixel (annotation!'s default) is what makes the finite pin
+# entry a pixel displacement; shown explicitly here because this panel pins a label.
+# Panels 2-3 pin nothing, so they leave it at the default.
 annotation!(ax1, offs, points; text = labels,
             algorithm = TextRepelAlgorithm(), labelspace = :relative_pixel)
 
