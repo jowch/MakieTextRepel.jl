@@ -17,8 +17,9 @@ placement. Four independent components (reported separately, never collapsed):
   leader length.
 - `crossings` — crossing leader pairs, via `connector_for` + `find_crossings`.
 
-Labels flagged in `dropped` are excluded from `overlaps` and `mean_leader`
-(they are render-suppressed). `box_padding`/`point_padding`/`min_segment_length`
+Labels flagged in `dropped` are excluded from `overlaps`, `point_overlaps`, and
+`mean_leader` (they are render-suppressed) — a dropped label neither covers a
+marker nor is counted as a covered anchor. `box_padding`/`point_padding`/`min_segment_length`
 must match the recipe values so the crossing count agrees with what renders.
 `bounds` is accepted for call-shape parity with the recipe/solver and is
 currently unused (reserved for future viewport-aware metrics).

@@ -180,7 +180,8 @@ end
         total_overlaps += q.overlaps; total_point += q.point_overlaps
         total_crossings += q.crossings; total_leader += q.mean_leader
     end
-    @info "Q battery baseline" total_crossings total_leader   # TEMP: read total_leader to freeze the const
+    # To re-derive the frozen baseline if fixtures change: print `total_leader` here and
+    # update `BASELINE_SUM_LEADER` above (kept out of the default run to keep CI output clean).
     @test total_overlaps == 0 && total_point == 0   # aggregate hard-term non-regression
     @test total_crossings == 0                      # crossing baseline (Stage 3 must not regress)
     @test total_leader ≤ 1.05 * BASELINE_SUM_LEADER  # leader-length regression gate
