@@ -684,7 +684,26 @@ git commit -m "feat(side_select): Imhof readability as a weightless lexicographi
 
 # Stage 3 — Crossing elimination
 
-## Task 3.1: Crossing term in the best-of-passes selector (Part A)
+## Task 3.1: Crossing term in the best-of-passes selector (Part A) — SKIPPED (no-op)
+
+> **RESOLUTION (2026-06-13): SKIPPED during implementation.** Investigation proved this
+> task is a structural no-op. `side_select` only ever places labels at the 8 Imhof slots,
+> where the anchor sits on the label box face, so `connector_for` returns zero-length /
+> undrawn stub connectors — `find_crossings` is **always empty** within `side_select`
+> regardless of arrangement (verified exhaustively over slot-pair combinations and by REPL:
+> the plan fixture and a `point_padding=10` variant both yield `crossings=0`, and the greedy
+> sends both labels to the same shortest-leader T slot, discarding the crossing seeds). A
+> `crossings` term in `global_key` would add an O(n²) `find_crossings` cost per pass for zero
+> behavioral effect, and the Step-1 test below is unconstructible (vacuous). Crossings only
+> become real **post-legalize** (arbitrary offsets → long leaders), which is precisely where
+> **Task 3.2's swap search** operates (and which has a guaranteed-crossing warm-start fixture).
+> Task 3.2 does **not** depend on this change (its `swapkey` reads post-legalize
+> `label_cost` crossings). The plan had hedged here ("Part A only *biases* selection; Part B
+> is the real crossing-killer; do not over-invest if a robust fresh-solve crossing proves
+> hard to construct") — this resolution confirms that hedge. `global_key` stays the 3-tuple
+> `(hard, leader, ranksum)` from Task 2.1.
+
+The original (not-implemented) Task 3.1 spec follows for the record.
 
 Add the arrangement's crossing count as lex **level 2** in `global_key` only (between
 `hard_overlaps` and `soft`). This biases best-of-passes snapshot selection toward
