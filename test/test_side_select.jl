@@ -88,3 +88,35 @@ end
     s2 = side_select(anchors, sizes, ps, bounds, seed, p)
     @test s1 == s2
 end
+
+@testset "side_select steers a label off a foreign marker" begin
+    # Two anchors. Label 1 is large; its default short-leader slot would cover anchor 2's
+    # marker. With the marker term, label 1 must pick a slot that clears anchor 2.
+    anchors = [Point2f(100, 100), Point2f(140, 100)]
+    sizes   = [Vec2f(60, 20), Vec2f(20, 10)]
+    p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
+    ps      = [sizes[i] .+ 2 * Float32(p.box_padding) for i in 1:2]
+    bounds  = Rect2f(0, 0, 400, 400)
+    seed    = [Vec2f(0, 0), Vec2f(0, 0)]
+    sel = side_select(anchors, sizes, ps, bounds, seed, p)
+    # anchor 2 must NOT be covered by label 1's chosen box (unpadded text box + point_padding)
+    box1 = box_at(anchors[1], sel[1], sizes[1])
+    @test !MakieTextRepel.point_covered(anchors[2], box1, p.point_padding)
+end
+
+@testset "side_select does NOT avoid a label's own anchor" begin
+    # A single label: its own anchor is inside/adjacent to its box by construction.
+    # The marker term must skip j == i, so a lone label still takes its shortest slot.
+    # For a wider-than-tall label (40×16), the shortest-leader slot is T (leader 10), NOT
+    # TR (leader 24): the key is (overlaps, leader), and leader dominates. T also beats B
+    # (equal leader 10) because cands iterate in IMHOF order (T before B), strict <.
+    anchors = [Point2f(200, 200)]
+    sizes   = [Vec2f(40, 16)]
+    p       = RepelParams(box_padding = 0.0, point_padding = 2.0)
+    ps      = [sizes[1] .+ 2 * Float32(p.box_padding)]
+    bounds  = Rect2f(0, 0, 400, 400)
+    seed    = [Vec2f(0, 0)]
+    sel = side_select(anchors, sizes, ps, bounds, seed, p)
+    @test sel[1] == MakieTextRepel._constrain(
+        MakieTextRepel.slot_offset(:T, sizes[1], p.point_padding), p.only_move)
+end
