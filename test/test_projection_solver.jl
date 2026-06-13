@@ -8,9 +8,9 @@ using Test
 # Defined first because @testset bodies execute top-to-bottom as the file loads.
 randn_stub(i) = sin(Float64(i) * 12.9898) * 4.0
 
-psz(sizes, bp) = [s .+ Vec2f(2bp, 2bp) for s in sizes]
+psz_proj(sizes, bp) = [s .+ Vec2f(2bp, 2bp) for s in sizes]
 function novl(anchors, offsets, sizes, bp; dropped = nothing)
-    ps = psz(sizes, bp); n = length(anchors); c = 0
+    ps = psz_proj(sizes, bp); n = length(anchors); c = 0
     for i in 1:n, j in (i+1):n
         (dropped !== nothing && (dropped[i] || dropped[j])) && continue
         ox = (ps[i][1]+ps[j][1])/2 - abs((anchors[i][1]+offsets[i][1]) - (anchors[j][1]+offsets[j][1]))
@@ -108,7 +108,7 @@ end
     p = RepelParams()
     anchors = [Point2f(0, 0), Point2f(0, 0), Point2f(0, 0)]
     sizes   = [Vec2f(20, 20) for _ in 1:3]
-    ps = psz(sizes, p.box_padding)
+    ps = psz_proj(sizes, p.box_padding)
     offsets = [Vec2f(0, 0), Vec2f(0, 0), Vec2f(0, 0)]   # all coincident → all overlap all
     dropped = falses(3)
     idx = drop_most_overlapped!(dropped, anchors, offsets, ps, nothing)
@@ -123,7 +123,7 @@ end
     # index (label 2, ov=0) that the tie-break fallback would pick if obstacles were ignored.
     anchors = [Point2f(50, 50), Point2f(300, 300)]
     sizes   = [Vec2f(20, 20) for _ in 1:2]
-    ps = psz(sizes, p.box_padding)
+    ps = psz_proj(sizes, p.box_padding)
     offsets = [Vec2f(0, 0), Vec2f(0, 0)]
     obstacles = [Rect2f(40, 40, 20, 20)]                 # covers label 1's box
     dropped = falses(2)

@@ -315,20 +315,27 @@ end
     end
 
     xs, ys, labels = hero_dataset()
-    fig = Figure(size = (400, 400)); ax = Axis(fig[1, 1])
-    p = textrepel!(ax, xs, ys; text = labels, fontsize = 13, markersize = 9)
+    # Reproduce the COMMITTED hero artifact geometry (examples/readme_example.jl): a
+    # 2100×700 figure with three aspect=1 titled panels; textrepel! lives in the middle.
+    # An earlier version of this test rendered a single 400×400 axis — a DIFFERENT pixel
+    # viewport that masked extra drops on the real 3-panel artifact (caught in PR review
+    # round 1: the committed 1200×400 hero dropped node 11 and node 19). At the hero size
+    # the scene has room, so the marker-clearance floor clears every marker (own + foreign)
+    # with NO label dropped — the honest "point_overlaps 1→0, no extra drops" result.
+    fig = Figure(size = (2100, 700), fontsize = 15)
+    Axis(fig[1, 1]; title = "text! (overlapping)", aspect = 1)
+    ax2 = Axis(fig[1, 2]; title = "textrepel! (resolved)", aspect = 1)
+    p = textrepel!(ax2, xs, ys; text = labels, fontsize = 13, markersize = 9)
+    scatter!(ax2, xs, ys; color = :tomato, markersize = 9)
+    Axis(fig[1, 3]; title = "annotation! + TextRepelAlgorithm", aspect = 1)
     Makie.update_state_before_display!(fig)
-    stats_dropped = count(p.computed_dropped[])
-    anchors = p.computed_anchors[]; sizes = p.computed_sizes[]
-    offsets = p.computed_offsets[]; dropped = p.computed_dropped[]
-    bnds = p.computed_params[].bounds
-    q = label_cost(anchors, sizes; offsets = offsets, bounds = bnds, dropped = dropped,
-                   box_padding = 4.0, point_padding = 9 / 2 + 0.5,
-                   min_segment_length = 2.0)
-    @test q.point_overlaps == 0
 
-    # Drop baseline: frozen so point_overlaps==0 cannot be met by dropping the
-    # occluding label. Set to the observed count(dropped) on first green run.
-    HERO_DROP_BASELINE = 1   # observed 2026-06-13
-    @test stats_dropped ≤ HERO_DROP_BASELINE
+    dropped = p.computed_dropped[]
+    q = label_cost(p.computed_anchors[], p.computed_sizes[]; offsets = p.computed_offsets[],
+                   bounds = p.computed_params[].bounds, dropped = dropped,
+                   box_padding = 4.0,
+                   point_padding = 9 / 2 + 0.5,   # markersize=9 ⇒ radius 4.5 + 0.5px gap = 5.0
+                   min_segment_length = 2.0)
+    @test count(dropped) == 0      # all 22 labels retained (no over-capacity drop)
+    @test q.point_overlaps == 0    # every marker cleared (1 → 0 vs pre-#21)
 end

@@ -138,7 +138,7 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
             for i in 1:n
                 w_anchors[m + k + i] = anchors[i]
                 w_offsets[m + k + i] = Vec2f(0, 0)
-                w_psizes[m + k + i]  = Vec2f(2mc, 2mc)
+                w_psizes[m + k + i]  = Vec2f(2mc, 2mc)   # psize is full width; mc is the half-extent
                 w_fixed[m + k + i]   = true
                 w_soft[m + k + i]    = true
             end

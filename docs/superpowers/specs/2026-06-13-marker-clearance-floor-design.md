@@ -282,17 +282,19 @@ TDD. Run the suite once, tee to `test/output/test-<agent-id>.log`, grep (per CLA
    absorbs legalize's `0.01` detection tol + Float32 noise). **Do not** assert a
    per-axis center gap — legalize separates on one axis only, so the floor is per-axis
    disjunctive (see §5), and a center-gap assertion fails on valid layouts.
-2. **Hero `point_overlaps == 0`** (`test_integration.jl`, net-new infrastructure):
-   `examples/readme_example.jl` already seeds its RNG (`Random.seed!(20260527)`), but the
-   dataset is built by an inline loop only inside the example. Extract the hero anchors +
-   labels into a **shared deterministic source** (a seeded constructor function or a
-   committed literal vector) used by both the example and the test, so the test scores
-   the same scene as the hero image. Assert `solve_stats(...).point_overlaps == 0`
-   (currently 1) **and** `count(dropped) ≤ BASELINE` where `BASELINE` is a **frozen
-   integer constant committed in the test with a re-derivation comment** (mirroring
-   `BASELINE_SUM_LEADER` in `test_projection_solver.jl`), so `point_overlaps == 0` cannot
-   be met by dropping the offender. Stat source: `solve_cluster` + `label_cost` on the
-   shared hero anchors/sizes.
+2. **Hero `point_overlaps == 0`, no extra drops** (`test_integration.jl`, net-new
+   infrastructure): extract the hero dataset into a **shared deterministic source**
+   (seeded `hero_dataset()`, copied verbatim into the test — tests must not `include` the
+   example) so the test scores the same scene as the hero image. **The test must render
+   the COMMITTED artifact geometry**, not a convenient stand-in: build the 2100×700
+   three-panel figure (three `aspect=1` titled axes; `textrepel!` on the middle) and read
+   `computed_*`/`label_cost` off the middle panel. (A single 400×400 axis is a *different*
+   pixel viewport that drops a different label count and would mask extra drops on the
+   real artifact — PR-review round 1 caught exactly this.) Assert **`count(dropped) == 0`
+   AND `point_overlaps == 0`** — the honest acceptance bar. The hero figure is sized
+   2100×700 specifically so the 5 px floor has room to clear every marker with zero drops;
+   at the old 1200×400 the middle panel was over-capacity and dropped node 11 + node 19.
+   Stat source: `label_cost` on the middle panel's `computed_*`.
 3. **`markersize` attribute** (`test_integration.jl`): `markersize = m ⇒`
    `computed_params.point_padding == m/2 + 0.5`; `markersize` overrides an explicit
    `point_padding`; a `Vector` markersize raises `ArgumentError`. Re-solve test: set
@@ -354,7 +356,11 @@ TDD. Run the suite once, tee to `test/output/test-<agent-id>.log`, grep (per CLA
   foreign) by ≥ the configured clearance **after** legalize, for feasible
   `only_move=:both` center-align layouts. ✅ (§1, test 1)
 - `point_overlaps == 0` on the README/hero dataset (currently 1), without extra drops.
-  ✅ (test 2)
+  ✅ (test 2) — verified on the committed 2100×700 three-panel artifact: 0 drops, 0
+  occlusion. (The hero figure was enlarged from 1200×400 to give the 5 px floor room;
+  at 1200×400 the middle panel was over-capacity and dropped node 11 + node 19, which is
+  the designed over-capacity behavior, not a clean win — so the showcase uses a size
+  where all 22 labels are retained.)
 - Regenerated hero image shows no marker-occluded labels. ✅ (test 7)
 - New regression test on a dense fixture asserting the post-legalize clearance floor.
   ✅ (test 1)
