@@ -235,3 +235,46 @@ end
     @test q.overlaps == 0                          # survivors overlap-free (zero-overlap wins conflicts)
     @test any(res.dropped)                         # over-capacity ⇒ at least one drop, no hang
 end
+
+@testset "marker-clearance floor (#21)" begin
+    using MakieTextRepel: ProjectionSolver, RepelParams, solve_cluster, point_covered, box_at
+    bounds = Rect2f(0, 0, 200, 200)
+    EPS = 0.05
+
+    # --- Floor regression (warm-start legalize-erasure) ---
+    anchors = [Point2f(50, 100), Point2f(80, 100)]
+    sizes   = [Vec2f(40, 20),   Vec2f(40, 20)]
+    pp = 5.0
+    s = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp))
+    init = [Vec2f(15, 0), Vec2f(0, -80)]
+    res = solve_cluster(s, anchors, sizes, bounds; init_state = init)
+    for i in eachindex(anchors)
+        res.dropped[i] && continue
+        bi = box_at(anchors[i], res.offsets[i], sizes[i])     # UNPADDED text box
+        for j in eachindex(anchors)
+            @test !point_covered(anchors[j], bi, pp - EPS)    # own + foreign cleared
+        end
+    end
+
+    # --- Pinned label on its own marker is bit-identical (exempt) ---
+    pin = BitVector([true, false])
+    pinoff = [Vec2f(0, 0), Vec2f(0, -80)]     # label 1 sits ON its own anchor
+    s2 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp))
+    res2 = solve_cluster(s2, anchors, sizes, bounds; init_state = pinoff,
+                         pin_mask = pin, pinned_offsets = pinoff)
+    @test res2.offsets[1] == Vec2f(0, 0)      # pinned: not pushed off its marker
+    @test res2.dropped[1] == false            # pinned: not dropped
+
+    # --- only_move=:x, both anchors on one side → cleared on x, no drop ---
+    # Label 2 parked FAR LEFT IN X (Vec2f(-80,0)); only_move=:x preserves that x so it
+    # never collapses onto / overlaps label 1. With no label-label push, ONLY the marker
+    # keep-out can move label 1 → the test genuinely exercises the floor.
+    anchors_x = [Point2f(40, 100), Point2f(50, 100)]
+    s3 = ProjectionSolver(RepelParams(; box_padding = 4.0, point_padding = pp,
+                                        only_move = :x))
+    res3 = solve_cluster(s3, anchors_x, sizes, bounds; init_state = [Vec2f(15, 0), Vec2f(-80, 0)])
+    @test count(res3.dropped) == 0
+    b1 = box_at(anchors_x[1], res3.offsets[1], sizes[1])
+    @test !point_covered(anchors_x[2], b1, pp - EPS)   # foreign cleared on locked x axis
+    @test !point_covered(anchors_x[1], b1, pp - EPS)   # own marker cleared too
+end
