@@ -114,8 +114,9 @@ function Makie.plot!(p::TextRepel)
         # The two animation attrs (`init_state`, `obstacles`) are also threaded in here:
         # `nothing`/`Rect2f[]` defaults reproduce the unchanged fresh-placement path.
         # Coerce to the seam's expected types; `is` nothing = fresh, `obs` empty = none.
-        is_v  = is  === nothing ? nothing : Vector{Vec2f}(is)
-        obs_v = obs === nothing ? Rect2f[] : Vector{Rect2f}(obs)
+        # (`obstacles` defaults to `Rect2f[]`, never `nothing`, so no nothing-guard needed.)
+        is_v  = is === nothing ? nothing : Vector{Vec2f}(is)
+        obs_v = Vector{Rect2f}(obs)
         offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds;
                                                init_state = is_v, obstacles = obs_v)
         (; anchors, sizes, offsets, dropped, params)
