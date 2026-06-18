@@ -16,9 +16,10 @@
 Place `length(anchors)` text labels around their `anchors` using the default
 `ProjectionSolver` (Voronoi seed → side-select → crossing repair → constraint-
 projection legalize → geometric over-capacity drop), returning per-label pixel
-offsets and a drop mask. This is the low-level placement primitive that the
-`textrepel!` recipe and `TextRepelAlgorithm` use internally, exposed as a stable
-public function decoupled from the render/annotation machinery.
+offsets and a drop mask. It exposes the same `ProjectionSolver`/`solve_cluster`
+seam that the `textrepel!` recipe and `TextRepelAlgorithm` drive internally — a
+stable public peer over that seam (not the entry point they call), decoupled from
+the render/annotation machinery.
 
 All distances are in pixels and all geometry is in one consistent pixel space.
 
@@ -59,6 +60,11 @@ function warm_solve(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, bounds::Rect
                     box_padding::Real         = 4.0,
                     point_padding::Real       = 5.0,
                     min_segment_length::Real  = 2.0)
+    # Validate at the public boundary so a sizes/anchors mismatch surfaces as a
+    # direct DimensionMismatch rather than a downstream index error on the fresh
+    # path (solve_cluster guards pin_mask/init_state lengths, but not sizes).
+    length(sizes) == length(anchors) || throw(DimensionMismatch(
+        "sizes length $(length(sizes)) does not match anchors length $(length(anchors))"))
     params = RepelParams(; only_move = only_move,
                            box_padding = Float64(box_padding),
                            point_padding = Float64(point_padding),

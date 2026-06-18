@@ -73,14 +73,26 @@ const WS_SIZES   = Vec2f[(40, 16) for _ in 1:5]
         pin = falses(length(WS_ANCHORS)); pin[1] = true
         pinned = Vec2f[Vec2f(0, 0) for _ in 1:length(WS_ANCHORS)]
         pinned[1] = Vec2f(30, 30)
-        obs = Rect2f[Rect2f(100, 100, 60, 40)]
+        # This obstacle is NOT inert: it overlaps non-pinned label 2's default slot
+        # and forces it to move (verified: [0,13] → [-54,13] vs the no-obstacle
+        # solve below). A degenerate obstacle would let the equivalence assertion
+        # pass even if warm_solve dropped the kwarg — so the guard below makes the
+        # obstacle's effect explicit, mirroring the point_padding self-verification.
+        obs = Rect2f[Rect2f(170, 50, 110, 90)]
         p = RepelParams(; only_move = :both, box_padding = 4.0,
                           point_padding = 5.0, min_segment_length = 2.0)
         direct = solve_cluster(ProjectionSolver(p), WS_ANCHORS, WS_SIZES, WS_BOUNDS;
                                pin_mask = pin, pinned_offsets = pinned, obstacles = obs)
         warm = warm_solve(WS_ANCHORS, WS_SIZES, WS_BOUNDS;
                           pin_mask = pin, pinned_offsets = pinned, obstacles = obs)
-        @test warm.offsets == direct.offsets
-        @test warm.offsets[1] == Vec2f(30, 30)   # pinned label held at its fixed offset
+        noobs = warm_solve(WS_ANCHORS, WS_SIZES, WS_BOUNDS;
+                           pin_mask = pin, pinned_offsets = pinned)
+        @test warm.offsets == direct.offsets         # forwards pin + obstacles to the seam
+        @test warm.offsets[1] == Vec2f(30, 30)       # pinned label held at its fixed offset
+        @test warm.offsets != noobs.offsets          # the obstacle actually changed placement
+    end
+
+    @testset "validates sizes length at the public boundary" begin
+        @test_throws DimensionMismatch warm_solve(WS_ANCHORS, WS_SIZES[1:end-1], WS_BOUNDS)
     end
 end
