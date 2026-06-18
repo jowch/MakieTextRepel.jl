@@ -407,10 +407,11 @@ end
         calls_after_setup = measure_calls[]
 
         # Solve-only update: re-fires the solve but MUST reuse the cached measurement.
-        pl.box_padding[] = pl.box_padding[] + 36.0   # large enough to re-fire the solve
+        new_bp = pl.box_padding[] + 36.0
+        pl.box_padding[] = new_bp
         Makie.update_state_before_display!(fig.scene)
-        @test measure_calls[] == calls_after_setup   # NO re-measure (split reuses)
-        @test length(pl.computed_offsets[]) == 3     # solve still ran
+        @test measure_calls[] == calls_after_setup            # NO re-measure (split reuses)
+        @test pl.computed_params[].box_padding == new_bp      # solve DID re-fire (params rebuilt)
 
         # Measure-input update: measurement MUST refresh.
         pl.text[] = ["alpha", "beta", "DELTAdelta"]

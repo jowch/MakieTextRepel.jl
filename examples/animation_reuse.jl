@@ -22,6 +22,6 @@ outfile = joinpath(@__DIR__, "animation_reuse.mp4")
 record(fig, outfile, 1:90; framerate = 30) do frame
     t = frame / 90 * 2pi
     # Anchors drift on small circles; text never changes ⇒ no re-measurement.
-    pos[] = Point2f[(0.5 + 0.12cos(t + i), 0.5 + 0.12sin(t + i)) for i in 1:length(labels)]
+    pos[] = Point2f[(0.5 + 0.12cos(t + i), 0.5 + 0.12sin(t + i)) for i in eachindex(labels)]
 end
 @info "wrote $outfile"
