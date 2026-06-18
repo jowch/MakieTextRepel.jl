@@ -5,7 +5,7 @@ using GeometryBasics
 using LinearAlgebra
 import TextMeasure
 
-export textrepel, textrepel!, warm_solve
+export textrepel, textrepel!, warm_solve, measure_labels
 
 # Shared config (consumed by both solvers)
 include("params.jl")

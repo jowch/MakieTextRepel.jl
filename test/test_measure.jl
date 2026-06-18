@@ -93,3 +93,12 @@ end
     @test all(isfinite, lsize)
     @test lsize[1] > 0 && lsize[2] > 0
 end
+
+@testset "measure_labels public surface (#26)" begin
+    font = "TeX Gyre Heros Makie"
+    # Exported so warm_solve consumers have a fully public labels -> sizes path.
+    @test :measure_labels in names(MakieTextRepel)
+    # 3-arg convenience form measures at px_per_unit = 1.0 (identical to the 4-arg form).
+    @test measure_labels(["Hi", "Mauna Kea"], font, 24.0) ==
+          measure_labels(["Hi", "Mauna Kea"], font, 24.0, 1.0)
+end
