@@ -86,6 +86,13 @@ Three layers:
 
 Output is deterministic — same data, same figure.
 
+### Animations
+
+`textrepel!` reuses text measurements across reactive updates. In an animation where
+the label text is constant, mutating the anchor positions (e.g. `positions[] = …` each
+frame) re-solves placement but does **not** re-measure the text — measurement only
+re-runs when `text`, `fontsize`, or `font` changes. See `examples/animation_reuse.jl`.
+
 Like [`ggrepel`](https://ggrepel.slowkow.com/) and
 [`adjustText`](https://adjusttext.readthedocs.io/), MakieTextRepel repels overlapping
 labels and draws leaders back to each point; unlike them it splits placement into a
