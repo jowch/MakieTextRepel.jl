@@ -5,7 +5,7 @@ using GeometryBasics
 using LinearAlgebra
 import TextMeasure
 
-export textrepel, textrepel!
+export textrepel, textrepel!, warm_solve
 
 # Shared config (consumed by both solvers)
 include("params.jl")
@@ -29,6 +29,9 @@ include("force_model.jl")     # solve_repel + helpers (formerly solver.jl)
 include("solvers/abstract.jl")    # AbstractClusterSolver interface
 include("solvers/force.jl")       # ForceSolver — wraps force_model.jl
 include("solvers/projection.jl")  # ProjectionSolver — the DEFAULT, composes the stages above
+
+# Public stateless warm-start primitive (face over the internal seam)
+include("warm_solve.jl")
 
 # Measurement + Makie surfaces
 include("measure.jl")
