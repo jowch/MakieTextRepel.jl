@@ -162,9 +162,14 @@ git commit -m "recipe: split measure/solve lift so positions reuse measurements 
 Create `examples/animation_reuse.jl`:
 ```julia
 # examples/animation_reuse.jl
-# Demonstrates the measure-once / layout-many property (#25): in an animation the
-# label text is constant, so positions update every frame WITHOUT re-measuring. We
-# prove reuse by checking that `computed_sizes` is the SAME object before/after the run.
+# Demonstrates the measure-once / layout-many property (#25): in an animation the label
+# text is constant, so positions update every frame and the labels are re-placed —
+# WITHOUT re-measuring. The reuse is structural: the recipe keys text measurement on
+# `text`/`fontsize`/`font` only (a separate compute node from the solve), so a per-frame
+# position change re-solves placement but never re-runs measurement. (The faithful unit
+# proof of this lives in the test suite — "measurement reuse across solve-only updates".
+# Note: comparing `computed_sizes` object identity does NOT prove reuse here, because
+# Makie's ComputeGraph deduplicates equal-valued node outputs.)
 using CairoMakie
 using MakieTextRepel
 
@@ -175,25 +180,24 @@ labels = ["alpha", "beta", "gamma", "delta", "epsilon"]
 pos = Observable(Point2f[(0.5, 0.5), (0.52, 0.51), (0.48, 0.49), (0.51, 0.47), (0.49, 0.53)])
 scatter!(ax, pos; markersize = 8)
 pl = textrepel!(ax, pos; text = labels, markersize = 8)
-Makie.update_state_before_display!(fig.scene)
 
-sizes0 = pl.computed_sizes[]   # capture the measured-sizes object before animating
-record(fig, joinpath(@__DIR__, "animation_reuse.mp4"), 1:90; framerate = 30) do frame
+outfile = joinpath(@__DIR__, "animation_reuse.mp4")
+record(fig, outfile, 1:90; framerate = 30) do frame
     t = frame / 90 * 2pi
     # Anchors drift on small circles; text never changes ⇒ no re-measurement.
     pos[] = Point2f[(0.5 + 0.12cos(t + i), 0.5 + 0.12sin(t + i)) for i in 1:length(labels)]
 end
-@info "measurements reused across all frames: $(pl.computed_sizes[] === sizes0)"
+@info "wrote $outfile"
 ```
 
-- [ ] **Step 2: Run the example and confirm reuse**
+- [ ] **Step 2: Run the example and confirm it renders without error**
 
 ```bash
 cd /home/jonathanchen/projects/MakieTextRepel.jl/.claude/worktrees/measure-reuse
 julia --project=. examples/animation_reuse.jl 2>&1 | tee test/output/anim-measure-reuse.log
-grep -E "measurements reused across all frames" test/output/anim-measure-reuse.log
+grep -E "wrote .*animation_reuse" test/output/anim-measure-reuse.log && ls -l examples/animation_reuse.mp4
 ```
-Expected: `measurements reused across all frames: true` and `animation_reuse.mp4` written. (If `ffmpeg`/`mp4` is unavailable, switching the output to `animation_reuse.gif` is an acceptable fallback — the `=== sizes0` assertion is the format-independent proof.)
+Expected: the script completes without error and `animation_reuse.mp4` is written. (If `ffmpeg`/`mp4` is unavailable, switch the output filename to `animation_reuse.gif` — the example is a rendering demo; the faithful reuse proof is the Task 1 unit test, not this script.)
 
 - [ ] **Step 3: Add docs notes**
 
