@@ -294,6 +294,48 @@ end
     end
 end
 
+@testset "recipe threads obstacles into the solve (#24)" begin
+    fig = Figure(); ax = Axis(fig[1, 1])
+    pts = [Point2f(1, 1), Point2f(2, 2), Point2f(1.5, 2.5), Point2f(2.2, 1.1)]
+    obs = Rect2f[Rect2f(40, 40, 120, 80)]   # pixel-space keep-out box
+    plt = textrepel!(ax, pts; text = ["alpha", "beta", "gamma", "delta"],
+                     obstacles = obs)
+    Makie.update_state_before_display!(fig)
+
+    anchors = plt.attributes[:computed_anchors][]
+    sizes   = plt.attributes[:computed_sizes][]
+    params  = plt.attributes[:computed_params][]
+    # The recipe's solve must equal a direct solve_cluster with the SAME obstacles…
+    direct = MakieTextRepel.solve_cluster(MakieTextRepel.ProjectionSolver(params),
+                                          anchors, sizes, params.bounds; obstacles = obs)
+    @test plt.attributes[:computed_offsets][] == direct.offsets
+    # …and differ from the no-obstacle solve (proving the attr actually took effect).
+    plain = MakieTextRepel.solve_cluster(MakieTextRepel.ProjectionSolver(params),
+                                         anchors, sizes, params.bounds)
+    @test plt.attributes[:computed_offsets][] != plain.offsets
+end
+
+@testset "recipe threads init_state (warm-start) into the solve (#24)" begin
+    fig = Figure(); ax = Axis(fig[1, 1])
+    pts = [Point2f(1, 1), Point2f(2, 2), Point2f(1.5, 2.5), Point2f(2.2, 1.1)]
+    n = length(pts)
+    warm = Vec2f[Vec2f(0, 0) for _ in 1:n]   # warm-start from "all at anchor"
+    plt = textrepel!(ax, pts; text = ["alpha", "beta", "gamma", "delta"],
+                     init_state = warm)
+    Makie.update_state_before_display!(fig)
+
+    anchors = plt.attributes[:computed_anchors][]
+    sizes   = plt.attributes[:computed_sizes][]
+    params  = plt.attributes[:computed_params][]
+    direct = MakieTextRepel.solve_cluster(MakieTextRepel.ProjectionSolver(params),
+                                          anchors, sizes, params.bounds; init_state = warm)
+    @test plt.attributes[:computed_offsets][] == direct.offsets
+    # Warm (relax-only) ≠ fresh (seed + side-select) on this crowded fixture.
+    fresh = MakieTextRepel.solve_cluster(MakieTextRepel.ProjectionSolver(params),
+                                         anchors, sizes, params.bounds)
+    @test plt.attributes[:computed_offsets][] != fresh.offsets
+end
+
 @testset "hero dataset geometry: no marker occlusion (#21)" begin
     using CairoMakie
     using Random              # Random.seed!, randn (global RNG)

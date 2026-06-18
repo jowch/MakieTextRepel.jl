@@ -23,6 +23,10 @@
     point_padding = 5.0
     "Size of the SIBLING scatter marker, if any. `textrepel!` draws NO markers itself; this only tells the solver how much to clear. When set (scalar), overrides `point_padding` with `markersize/2 + 0.5`. Assumes a disc marker in `markerspace = :pixel` (the scatter default); for other markers set `point_padding` directly. `nothing` = use `point_padding`."
     markersize = nothing
+    "Warm-start offsets (`Vector{Vec2f}`, pixel space), one per label, to relax from instead of seeding a fresh placement; `nothing` = fresh placement each solve. For animated plots that re-solve per frame, feed the previous frame's `computed_offsets` here. Length must equal the number of labels."
+    init_state = nothing
+    "Extra keep-out boxes (`Vector{Rect2f}`, pixel space) the solver must place labels clear of, in addition to the data markers."
+    obstacles = Rect2f[]
     "Drop labels overlapping more than this many others (Inf = keep all). Inert under the default ProjectionSolver (no force loop / zero-overlap guarantee); affects only the in-tree ForceSolver."
     max_overlaps = Inf
 
@@ -75,9 +79,10 @@ function Makie.plot!(p::TextRepel)
     # 2. Measure + solve. Recomputes when anchors/text/font/size or params change.
     solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
                   p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
-                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs, p.min_segment_length, p.markersize) do px, labels, fs, font,
-                                                                                                       fr, frp, fpl, mi, om,
-                                                                                                       bp, pp, mo, bnds, ml, ms
+                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs, p.min_segment_length,
+                  p.markersize, p.init_state, p.obstacles) do px, labels, fs, font,
+                                                              fr, frp, fpl, mi, om,
+                                                              bp, pp, mo, bnds, ml, ms, is, obs
         anchors = [Point2f(q[1], q[2]) for q in px]
         sizes = measure_labels(labels, font, fs, 1.0)
         # markersize (sibling scatter) overrides point_padding when set. textrepel!
@@ -106,7 +111,13 @@ function Makie.plot!(p::TextRepel)
         # real Rect2f, not `nothing`.
         # Full placement strategy lives in the seam now (voronoi-seed → side-select →
         # crossing-repair → constraint-projection legalize).
-        offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds)
+        # The two animation attrs (`init_state`, `obstacles`) are also threaded in here:
+        # `nothing`/`Rect2f[]` defaults reproduce the unchanged fresh-placement path.
+        # Coerce to the seam's expected types; `is` nothing = fresh, `obs` empty = none.
+        is_v  = is  === nothing ? nothing : Vector{Vec2f}(is)
+        obs_v = obs === nothing ? Rect2f[] : Vector{Rect2f}(obs)
+        offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds;
+                                               init_state = is_v, obstacles = obs_v)
         (; anchors, sizes, offsets, dropped, params)
     end
 
