@@ -120,24 +120,25 @@ cross-call need is demonstrated (tracked separately if it arises).
 
 ## Test strategy
 
-A robust, graph-internals-agnostic signal: count calls into `measure_labels` via a
-module-level `Ref` instrument added to `src/measure.jl`
-(`const MEASURE_CALL_COUNT = Ref(0)`, incremented at the top of `measure_labels`). Tests
-reset it, drive the plot, and assert the count. This directly counts the expensive
-operation regardless of whether Makie's graph is push- or pull-based. The counter is
-inert in normal use (one integer increment per measure batch).
+Signal the reuse property with **object identity**, requiring no production test-state.
+The split threads the measured-sizes `Vector{Vec2f}` unchanged through `solved`, so the
+already-exposed `computed_sizes` node returns:
+- the **same object** (`===`) after a position-only update (measurement reused), and
+- a **new object** (`!==`) after a `text`/`fontsize`/`font` change (re-measured).
+
+This is also a genuine red→green: today's fused lift re-measures on every update,
+producing a fresh `Vector` each time, so the `===` assertion fails pre-fix.
 
 Acceptance test shape (full code in the plan):
-- build a plot, `update_state_before_display!`, reset counter
-- mutate `positions[]`, update → assert counter **unchanged**
-- mutate `text[]`, update → assert counter **incremented**
-- a separate test asserts byte-identity vs a direct `solve_cluster` (the existing #12
-  test already covers this; we keep it green).
+- build a plot, `update_state_before_display!`, capture `sizes_before = pl.computed_sizes[]`
+- mutate `positions[]`, update → assert `pl.computed_sizes[] === sizes_before`
+- mutate `text[]`, update → assert `pl.computed_sizes[] !== sizes_before`
+- byte-identity vs a direct `solve_cluster` is already covered by the existing #12 test;
+  we keep it green.
 
 ## Affected files
 
-- `src/recipe.jl` — split the `lift` (the only behavioral change).
-- `src/measure.jl` — add the `MEASURE_CALL_COUNT` test instrument + export it internally.
-- `test/test_integration.jl` — add the reuse test(s); keep #12 + coincident tests green.
+- `src/recipe.jl` — split the `lift` (the only behavioral change; no other `src/` file changes).
+- `test/test_integration.jl` — add the reuse test; keep #12 + coincident tests green.
 - `docs/` + `examples/` — add a movie/animation example demonstrating the pattern and a
   short note in `docs/algorithm.md` or README (the reuse property).

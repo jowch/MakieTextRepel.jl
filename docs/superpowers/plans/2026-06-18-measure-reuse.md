@@ -4,7 +4,7 @@
 
 **Goal:** Stop `textrepel!` from re-measuring label text when only positions/solve-params change, by splitting the recipe's fused measure+solve `lift` into two reactive nodes.
 
-**Architecture:** In `Makie.plot!(p::TextRepel)`, extract a `measured_sizes` compute node depending only on the three measure-invalidating inputs (`text`, `fontsize`, `font`); feed it into the existing `solved` node (which keeps all solve-only inputs). Makie's reactive graph then reuses the cached sizes whenever measurement provably can't change. A measurement call-counter in `measure.jl` is the test seam.
+**Architecture:** In `Makie.plot!(p::TextRepel)`, extract a `measured_sizes` compute node depending only on the three measure-invalidating inputs (`text`, `fontsize`, `font`); feed it into the existing `solved` node (which keeps all solve-only inputs). Makie's reactive graph then reuses the cached sizes whenever measurement provably can't change. The reuse is asserted via **object identity** on the already-exposed `computed_sizes` — no production test-state.
 
 **Tech Stack:** Julia 1.11, Makie 0.24 (ComputeGraph + `lift`), TextMeasure.jl (sibling checkout), CairoMakie (test-only).
 
@@ -13,112 +13,33 @@
 ## Global Constraints
 
 - **Byte-identity:** for any single static plot, computed offsets/dropped must equal the pre-change output. The "#12 structural defense" test (`test/test_integration.jl:225`) and the coincident-fan-out test (`:241`) must keep passing **unchanged**.
-- **No new dependencies.** No change to `Project.toml [deps]` or `[sources]`. After any `Pkg` op in the worktree, `git diff Project.toml` must be clean (the `../TextMeasure.jl` relative source resolves via the `.claude/worktrees/TextMeasure.jl` symlink already created — do not let a resolve rewrite it; see the [Worktree + Pkg.resolve trap] note).
-- **Keep the layers Makie-free where they already are.** `measure.jl` stays render-free; the only addition is a plain `Ref{Int}` counter.
+- **No production test-state.** The measurement-reuse property is verified by object identity on the existing `computed_sizes` node — do NOT add counters, flags, or other test-only state to `src/`.
+- **No new dependencies.** No change to `Project.toml [deps]` or `[sources]`. **Do not `git add Project.toml`** — the `../TextMeasure.jl` relative source resolves via the `.claude/worktrees/TextMeasure.jl` symlink; a stray Pkg resolve may rewrite the path, and that rewrite must never be committed. Commit only the named files in each task.
+- **Keep the layers Makie-free where they already are.** `measure.jl` is not modified by this plan.
 - **Warm-start (`init_state`) is OUT of scope** — it would change outputs and break byte-identity. It is tracked by **issue #24** (recipe warm-start). #24 and this plan are complementary and touch mostly different surfaces; the only shared region is the recipe solve node, where this split makes warm-start *easier* to add later. Do not couple the two — keep the solve here a fresh solve.
 - All distances are pixels; `ppu` stays hardcoded `1.0` on the recipe path.
 
 ## Testing convention (project-mandated)
 
-Per `CLAUDE.md`: precompilation makes each `Pkg.test()` cost minutes. Run the suite once, tee to an agent-scoped log, then grep — do **not** re-run between greps. Pick one slug for the session.
+Per `CLAUDE.md`: precompilation makes each `Pkg.test()` cost minutes. Run the suite once, tee to an agent-scoped log, then grep — do **not** re-run between greps. Baseline is **721/721 passing** (captured `test/output/baseline-measure-reuse.log`).
 
 ```bash
 cd /home/jonathanchen/projects/MakieTextRepel.jl/.claude/worktrees/measure-reuse
-LOG="test/output/test-measure-reuse.log"   # test/output/ is gitignored
+LOG="test/output/test-<your-agent-id>.log"   # test/output/ is gitignored
 julia --project=. -e 'using Pkg; Pkg.test()' 2>&1 | tee "$LOG"
 grep -E "Test Summary|Fail|Error" "$LOG"
 ```
 
-Faster inner loop (optional): keep a scratch env alive and re-`include` the touched test file.
-```bash
-julia -e 'using Pkg; Pkg.activate("/tmp/mtr-measure-reuse"); Pkg.develop(path="/home/jonathanchen/projects/MakieTextRepel.jl/.claude/worktrees/measure-reuse"); Pkg.add(["CairoMakie","Test","LinearAlgebra"])'   # once
-julia --project=/tmp/mtr-measure-reuse -i -e 'using Test, LinearAlgebra, CairoMakie, MakieTextRepel; include("/home/jonathanchen/projects/MakieTextRepel.jl/.claude/worktrees/measure-reuse/test/test_integration.jl")'
-```
-
 ---
 
-### Task 1: Measurement call-counter test seam
-
-**Files:**
-- Modify: `src/measure.jl:9-11` (add counter + increment)
-- Test: `test/test_measure.jl` (append a testset)
-
-**Interfaces:**
-- Produces: `MakieTextRepel.MEASURE_CALL_COUNT :: Base.RefValue{Int}` — incremented by exactly 1 on each `measure_labels` call. Consumed by Task 2's reuse test.
-
-- [ ] **Step 1: Write the failing test**
-
-Append to `test/test_measure.jl`:
-```julia
-@testset "measure_labels call counter (#25 test seam)" begin
-    # Use the real font name (repo convention, test_measure.jl:7) — a Symbol like
-    # :regular resolves but emits a "Could not find font regular" warning each call.
-    fnt = "TeX Gyre Heros Makie"
-    MakieTextRepel.MEASURE_CALL_COUNT[] = 0
-    MakieTextRepel.measure_labels(["a", "bb"], fnt, 12.0, 1.0)
-    @test MakieTextRepel.MEASURE_CALL_COUNT[] == 1
-    MakieTextRepel.measure_labels(["c"], fnt, 12.0, 1.0)
-    @test MakieTextRepel.MEASURE_CALL_COUNT[] == 2
-end
-```
-
-- [ ] **Step 2: Run and verify it fails**
-
-Run the suite (tee to `$LOG`) and grep:
-```bash
-grep -nA3 "MEASURE_CALL_COUNT\|call counter" "$LOG"
-```
-Expected: `UndefVarError: MEASURE_CALL_COUNT` (the const does not exist yet).
-
-- [ ] **Step 3: Add the counter and increment**
-
-In `src/measure.jl`, replace lines 9-11:
-```julia
-"""Measure every label, returning a `Vector{Vec2f}` of (width, height) in pixels."""
-measure_labels(labels, font, fontsize::Real, px_per_unit::Real) =
-    [measure_one(lbl, font, Float64(fontsize), Float64(px_per_unit)) for lbl in labels]
-```
-with:
-```julia
-# Counts calls into `measure_labels` (one per batch). A test seam for the
-# measurement-reuse guarantee (#25): the recipe must not re-measure when only
-# positions/solve-params change. Inert in normal use (one Int increment per call).
-const MEASURE_CALL_COUNT = Ref(0)
-
-"""Measure every label, returning a `Vector{Vec2f}` of (width, height) in pixels."""
-function measure_labels(labels, font, fontsize::Real, px_per_unit::Real)
-    MEASURE_CALL_COUNT[] += 1
-    return [measure_one(lbl, font, Float64(fontsize), Float64(px_per_unit)) for lbl in labels]
-end
-```
-
-- [ ] **Step 4: Run and verify it passes**
-
-Re-run the suite (tee to `$LOG`), then:
-```bash
-grep -nA3 "call counter" "$LOG"
-grep -E "Test Summary" "$LOG"
-```
-Expected: the "call counter" testset shows 2/2 pass; no new failures elsewhere.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/measure.jl test/test_measure.jl
-git commit -m "measure: add MEASURE_CALL_COUNT test seam (#25)"
-```
-
----
-
-### Task 2: Split the recipe's measure/solve lift
+### Task 1: Split the recipe's measure/solve lift
 
 **Files:**
 - Modify: `src/recipe.jl:75-111` (split one `lift` into two nodes)
 - Test: `test/test_integration.jl` (append reuse testset)
 
 **Interfaces:**
-- Consumes: `MEASURE_CALL_COUNT` (Task 1).
-- Produces: a `measured_sizes` local node (`Vector{Vec2f}`) feeding `solved`. The `solved` named tuple is unchanged: `(; anchors, sizes, offsets, dropped, params)`. All `computed_*` nodes (`src/recipe.jl:115-119`) and downstream render nodes keep their current values.
+- Produces: a `measured_sizes` local node (`Vector{Vec2f}`) feeding `solved`. The `solved` named tuple is unchanged: `(; anchors, sizes, offsets, dropped, params)`. All `computed_*` nodes (`src/recipe.jl:115-119`) and downstream render nodes keep their current values. `computed_sizes` returns the *same object* across position-only updates (measurement reused) and a *new object* across text/fontsize/font changes.
 
 - [ ] **Step 1: Write the failing reuse test**
 
@@ -131,20 +52,24 @@ Append to `test/test_integration.jl`:
     pl = textrepel!(ax, pos; text = ["alpha", "beta", "gamma"])
     Makie.update_state_before_display!(fig.scene)
 
-    # Baseline established; zero the counter after the initial layout's measure.
-    MakieTextRepel.MEASURE_CALL_COUNT[] = 0
+    # The measured-sizes vector is threaded unchanged through `solved`. If the split
+    # reuses measurements, `computed_sizes` returns the SAME object (===) after a
+    # position-only update, and a NEW object after a text change. Object identity is
+    # the signal — no production test-state needed.
+    sizes_before = pl.computed_sizes[]
 
-    # Mutate ONLY positions → solver re-runs, but measurement must be REUSED.
+    # Mutate ONLY positions → solver re-runs, measurement must be REUSED (same object).
     pos[] = Point2f[(1.2, 1.1), (2.1, 2.2), (1.4, 2.6)]
     Makie.update_state_before_display!(fig.scene)
-    @test MakieTextRepel.MEASURE_CALL_COUNT[] == 0
+    @test pl.computed_sizes[] === sizes_before
     @test length(pl.computed_offsets[]) == 3          # solve still ran
     @test all(o -> all(isfinite, o), pl.computed_offsets[])
 
-    # Mutate text → measurement MUST refresh.
+    # Mutate text → measurement MUST refresh (new object).
     pl.text[] = ["alpha", "beta", "DELTAdelta"]
     Makie.update_state_before_display!(fig.scene)
-    @test MakieTextRepel.MEASURE_CALL_COUNT[] ≥ 1
+    @test pl.computed_sizes[] !== sizes_before
+    @test length(pl.computed_sizes[]) == 3
 end
 ```
 
@@ -154,7 +79,7 @@ Run the suite (tee to `$LOG`), then:
 ```bash
 grep -nA4 "measurement reuse across position" "$LOG"
 ```
-Expected: the first `@test MEASURE_CALL_COUNT[] == 0` FAILS (got 1) — today positions trigger a re-measure.
+Expected: the `@test pl.computed_sizes[] === sizes_before` FAILS — today the fused lift re-measures on every update, producing a fresh `Vector` object each time, so identity does not hold.
 
 - [ ] **Step 3: Split the lift**
 
@@ -209,12 +134,12 @@ In `src/recipe.jl`, replace the block at lines 75-111 (the comment `# 2. Measure
 Run the suite (tee to `$LOG`), then:
 ```bash
 grep -nA4 "measurement reuse across position" "$LOG"
-grep -nA2 "#12 structural defense\|byte-identity" "$LOG"
+grep -nA2 "#12 structural defense" "$LOG"
 grep -E "Test Summary" "$LOG"
 ```
-Expected: "measurement reuse" passes; the #12 structural-defense and coincident-fan-out testsets still pass; overall summary shows 0 failures / 0 errors.
+Expected: "measurement reuse" passes; the #12 structural-defense and coincident-fan-out testsets still pass; overall summary shows the prior 721 plus the new testset, 0 failures / 0 errors.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit** (do NOT add Project.toml)
 
 ```bash
 git add src/recipe.jl test/test_integration.jl
@@ -223,14 +148,14 @@ git commit -m "recipe: split measure/solve lift so positions reuse measurements 
 
 ---
 
-### Task 3: Animation example + docs note
+### Task 2: Animation example + docs note
 
 **Files:**
 - Create: `examples/animation_reuse.jl`
 - Modify: `README.md` (add a short "Animations" note) and `docs/algorithm.md` (one line on the reuse property)
 
 **Interfaces:**
-- Consumes: the public `textrepel!` recipe; mutating `positions[]` reuses measurements (Task 2).
+- Consumes: the public `textrepel!` recipe; mutating `positions[]` reuses measurements (Task 1), observable as `computed_sizes` object identity.
 
 - [ ] **Step 1: Write the example**
 
@@ -238,7 +163,8 @@ Create `examples/animation_reuse.jl`:
 ```julia
 # examples/animation_reuse.jl
 # Demonstrates the measure-once / layout-many property (#25): in an animation the
-# label text is constant, so positions update every frame WITHOUT re-measuring.
+# label text is constant, so positions update every frame WITHOUT re-measuring. We
+# prove reuse by checking that `computed_sizes` is the SAME object before/after the run.
 using CairoMakie
 using MakieTextRepel
 
@@ -248,25 +174,26 @@ ax = Axis(fig[1, 1], limits = (0, 1, 0, 1), title = "textrepel! animation (measu
 labels = ["alpha", "beta", "gamma", "delta", "epsilon"]
 pos = Observable(Point2f[(0.5, 0.5), (0.52, 0.51), (0.48, 0.49), (0.51, 0.47), (0.49, 0.53)])
 scatter!(ax, pos; markersize = 8)
-textrepel!(ax, pos; text = labels, markersize = 8)
+pl = textrepel!(ax, pos; text = labels, markersize = 8)
+Makie.update_state_before_display!(fig.scene)
 
-MakieTextRepel.MEASURE_CALL_COUNT[] = 0
+sizes0 = pl.computed_sizes[]   # capture the measured-sizes object before animating
 record(fig, joinpath(@__DIR__, "animation_reuse.mp4"), 1:90; framerate = 30) do frame
     t = frame / 90 * 2pi
     # Anchors drift on small circles; text never changes ⇒ no re-measurement.
     pos[] = Point2f[(0.5 + 0.12cos(t + i), 0.5 + 0.12sin(t + i)) for i in 1:length(labels)]
 end
-@info "frames rendered; measure_labels calls during animation = $(MakieTextRepel.MEASURE_CALL_COUNT[])"
+@info "measurements reused across all frames: $(pl.computed_sizes[] === sizes0)"
 ```
 
-- [ ] **Step 2: Run the example and confirm zero re-measures**
+- [ ] **Step 2: Run the example and confirm reuse**
 
 ```bash
 cd /home/jonathanchen/projects/MakieTextRepel.jl/.claude/worktrees/measure-reuse
-julia --project=/tmp/mtr-measure-reuse examples/animation_reuse.jl 2>&1 | tee test/output/anim-measure-reuse.log
-grep -E "measure_labels calls during animation" test/output/anim-measure-reuse.log
+julia --project=. examples/animation_reuse.jl 2>&1 | tee test/output/anim-measure-reuse.log
+grep -E "measurements reused across all frames" test/output/anim-measure-reuse.log
 ```
-Expected: `... calls during animation = 0` and `animation_reuse.mp4` written.
+Expected: `measurements reused across all frames: true` and `animation_reuse.mp4` written. (If `ffmpeg`/`mp4` is unavailable, switching the output to `animation_reuse.gif` is an acceptable fallback — the `=== sizes0` assertion is the format-independent proof.)
 
 - [ ] **Step 3: Add docs notes**
 
@@ -295,7 +222,7 @@ grep -E "Test Summary|Fail|Error" "$LOG"
 ```
 Expected: all testsets pass, 0 failures / 0 errors.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Commit** (do NOT add Project.toml)
 
 ```bash
 git add examples/animation_reuse.jl README.md docs/algorithm.md
@@ -306,14 +233,16 @@ git commit -m "docs: animation example showing measurement reuse (#25)"
 
 ## Self-Review
 
-- **Spec coverage:** Req 1 (positions don't re-measure) → Task 2 reuse test. Req 2 (text re-measures) → Task 2 reuse test. Req 3 (byte-identity) → Task 2 Step 4 keeps #12 + coincident tests green. Req 4 (computed_* / data_limits unchanged) → `solved` tuple and the `computed_*`/`data_limits` blocks are untouched by the split. Req 5 (no new dep; markersize unchanged) → Global Constraints + `eff_pp` logic preserved verbatim.
+- **Spec coverage:** Req 1 (positions don't re-measure) → Task 1 reuse test (`=== sizes_before`). Req 2 (text re-measures) → Task 1 reuse test (`!== sizes_before`). Req 3 (byte-identity) → Task 1 Step 4 keeps #12 + coincident tests green. Req 4 (computed_* / data_limits unchanged) → `solved` tuple and the `computed_*`/`data_limits` blocks are untouched by the split. Req 5 (no new dep; markersize unchanged) → Global Constraints + `eff_pp` logic preserved verbatim.
 - **Placeholder scan:** none — every code/command step is concrete.
-- **Type consistency:** `MEASURE_CALL_COUNT::Ref(0)` defined in Task 1, referenced as `MakieTextRepel.MEASURE_CALL_COUNT[]` in Tasks 2-3. `measured_sizes :: Vector{Vec2f}` matches `solve_cluster`'s `sizes::Vector{Vec2f}` parameter and the `solved.sizes` field used downstream.
+- **Type consistency:** `measured_sizes :: Vector{Vec2f}` matches `solve_cluster`'s `sizes::Vector{Vec2f}` parameter and the `solved.sizes` field used downstream; `computed_sizes = lift(s -> s.sizes, solved)` (unchanged) returns that object.
 
 ## Risks / open question
 
 - **ComputeGraph recompute semantics:** the design assumes that with `measured_sizes` no
   longer listing `px_anchors`/params as inputs, a position-only update does not propagate
-  into `measured_sizes`. Task 2 Step 2/Step 4 empirically prove this via the counter; if
-  Step 4 ever shows a nonzero count on the position-only mutation, stop and investigate
-  the graph wiring before proceeding (do not paper over it by widening the test).
+  into `measured_sizes`. Validation traced this through Makie 0.24.11 + ComputePipeline and
+  confirmed the subgraphs are disjoint; Task 1 Step 2/Step 4 prove it empirically via the
+  identity assertion. If Step 4 ever shows `computed_sizes[] !== sizes_before` on the
+  position-only mutation, stop and investigate the graph wiring before proceeding (do not
+  paper over it by weakening the assertion).
