@@ -13,5 +13,6 @@ using Test
     include("test_legalize.jl")
     include("test_side_select.jl")
     include("test_projection_solver.jl")
+    include("test_warm_solve.jl")
     include("test_annotation_algorithm.jl")
 end
