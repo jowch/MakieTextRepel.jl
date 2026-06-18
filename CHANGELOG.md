@@ -64,6 +64,12 @@ user-facing breaking changes** to report.
   size and `point_padding` is derived as `markersize/2 + 0.5`. `textrepel!` draws no
   markers itself; this only tells the solver how much to clear (assumes a disc marker
   in `markerspace = :pixel`; set `point_padding` directly for other markers).
+- **Text-measurement reuse across updates (#25).** `textrepel!` now measures label
+  text in a separate compute node keyed only on `text`/`fontsize`/`font`, feeding the
+  solve node. Position- or solve-parameter-only updates (e.g. mutating `positions[]`
+  per frame in an animation) re-solve placement *without* re-measuring — TextMeasure.jl's
+  "measure once, layout many" applied to the recipe. Output is unchanged for static
+  plots. See `examples/animation_reuse.jl`.
 
 #### Annotation plug-in
 
