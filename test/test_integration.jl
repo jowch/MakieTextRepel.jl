@@ -381,3 +381,46 @@ end
     @test count(dropped) == 0      # all 22 labels retained (no over-capacity drop)
     @test q.point_overlaps == 0    # every marker cleared (1 → 0 vs pre-#21)
 end
+
+@testset "measurement reuse across solve-only updates (#25)" begin
+    # The split's effect — text measurements are NOT recomputed on a solve-only update —
+    # is NOT observable through `computed_sizes` object identity: Makie's ComputeGraph
+    # deduplicates equal-valued node outputs, so `computed_sizes` keeps the same object
+    # whenever the measured widths are unchanged, REGARDLESS of whether `measure_labels`
+    # actually re-ran. The only faithful signal is the `measure_labels` CALL COUNT, which
+    # we instrument here from the test side (no production test-state). With the fused lift
+    # a solve-only `box_padding` change re-measures (+1 call); with the split it reuses the
+    # cached `measured_sizes` node (+0). A measure-input (`text`) change re-measures in both.
+    measure_calls = Ref(0)
+    try
+        @eval MakieTextRepel function measure_labels(labels, font, fontsize::Real, ppu::Real)
+            $(measure_calls)[] += 1
+            [measure_one(lbl, font, Float64(fontsize), Float64(ppu)) for lbl in labels]
+        end
+
+        fig = Figure(size = (400, 400))
+        ax = Axis(fig[1, 1])
+        pos = Observable(Point2f[(1, 1), (2, 2), (1.5, 2.5)])
+        pl = textrepel!(ax, pos; text = ["alpha", "beta", "gamma"])
+        Makie.update_state_before_display!(fig.scene)
+        @test measure_calls[] >= 1            # measured once at setup
+        calls_after_setup = measure_calls[]
+
+        # Solve-only update: re-fires the solve but MUST reuse the cached measurement.
+        new_bp = pl.box_padding[] + 36.0
+        pl.box_padding[] = new_bp
+        Makie.update_state_before_display!(fig.scene)
+        @test measure_calls[] == calls_after_setup            # NO re-measure (split reuses)
+        @test pl.computed_params[].box_padding == new_bp      # solve DID re-fire (params rebuilt)
+
+        # Measure-input update: measurement MUST refresh.
+        pl.text[] = ["alpha", "beta", "DELTAdelta"]
+        Makie.update_state_before_display!(fig.scene)
+        @test measure_calls[] > calls_after_setup    # re-measured on text change
+        @test length(pl.computed_sizes[]) == 3
+    finally
+        # Restore the production method (re-add the original definition).
+        @eval MakieTextRepel measure_labels(labels, font, fontsize::Real, px_per_unit::Real) =
+            [measure_one(lbl, font, Float64(fontsize), Float64(px_per_unit)) for lbl in labels]
+    end
+end

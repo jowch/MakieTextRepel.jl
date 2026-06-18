@@ -64,6 +64,22 @@ user-facing breaking changes** to report.
   size and `point_padding` is derived as `markersize/2 + 0.5`. `textrepel!` draws no
   markers itself; this only tells the solver how much to clear (assumes a disc marker
   in `markerspace = :pixel`; set `point_padding` directly for other markers).
+- **Text-measurement reuse across updates (#25).** `textrepel!` now measures label
+  text in a separate compute node keyed only on `text`/`fontsize`/`font`, feeding the
+  solve node. Position- or solve-parameter-only updates (e.g. mutating `positions[]`
+  per frame in an animation) re-solve placement *without* re-measuring — TextMeasure.jl's
+  "measure once, layout many" applied to the recipe. Output is unchanged for static
+  plots. See `examples/animation_reuse.jl`.
+- **`warm_solve` — public stateless warm-start primitive (#24).**
+  `warm_solve(anchors, sizes, bounds; init_state, pin_mask, pinned_offsets, obstacles, …)
+  -> (; offsets, dropped, iter, residual)`, a render-free face over the
+  `ProjectionSolver`/`solve_cluster` seam for non-recipe consumers (e.g. per-frame
+  animation) that re-solve placement keyed by their own ids. `textrepel!` gains matching
+  `init_state` (warm-start offsets) and `obstacles` (extra keep-out boxes) attributes so
+  the recipe itself can relax from the previous frame and avoid keep-outs.
+- **Exported `measure_labels` (#26).** `measure_labels(labels, font, fontsize[, px_per_unit])`
+  is now public, giving `warm_solve` consumers a fully public `labels -> sizes` path with
+  no reach into internals. The 3-argument form measures at `px_per_unit = 1.0`.
 
 #### Annotation plug-in
 

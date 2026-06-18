@@ -6,9 +6,29 @@
 _resolve_font(f) = Makie.to_font(f)
 _resolve_font(f::Symbol) = Makie.to_font(String(f))
 
-"""Measure every label, returning a `Vector{Vec2f}` of (width, height) in pixels."""
+"""
+    measure_labels(labels, font, fontsize) -> Vector{Vec2f}
+    measure_labels(labels, font, fontsize, px_per_unit) -> Vector{Vec2f}
+
+Render-free per-label text measurement: each label's unpadded `(width, height)` in
+pixels, as a `Vector{Vec2f}` in input order. `labels` may be `String`/`LaTeXString` or
+`Makie.RichText`; `font` is any Makie font attribute (a name `String`/`Symbol` or a font
+object); `fontsize` is in pixels. No `Scene` is allocated — measurement goes through
+TextMeasure.jl.
+
+The 3-argument form measures at `px_per_unit = 1.0` (pixel space), which is what the
+`textrepel!` recipe and pixel-space [`warm_solve`](@ref) consumers want; pass a 4th
+positional `px_per_unit` to scale. This is the public path for producing the `sizes`
+argument of `warm_solve`, e.g.
+`warm_solve(anchors, measure_labels(labels, font, fontsize), bounds; …)`.
+"""
 measure_labels(labels, font, fontsize::Real, px_per_unit::Real) =
     [measure_one(lbl, font, Float64(fontsize), Float64(px_per_unit)) for lbl in labels]
+
+# Friendly default: the recipe always measures at px_per_unit = 1.0, which is also the
+# right default for pixel-space warm_solve consumers. Keeps the 4-arg method (internal
+# callers pass ppu positionally) working unchanged.
+measure_labels(labels, font, fontsize::Real) = measure_labels(labels, font, fontsize, 1.0)
 
 # Plain strings (and LaTeXString) → TextMeasure layout engine, render-free.
 # The string path passes ppu straight into the backend (layout honors it).

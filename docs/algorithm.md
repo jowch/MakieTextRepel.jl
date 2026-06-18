@@ -34,6 +34,9 @@ deterministic stages in pixel space:
    allocated. Plain strings, LaTeX, and Makie rich text are all supported. Because
    placement uses real glyph metrics rather than character-count estimates, every
    overlap and clearance test runs against the actual text box.
+   Measurement and solving are separate compute nodes: text measurement is keyed on
+   `text`/`fontsize`/`font` only, so position-only updates (animations) reuse measurements
+   (issue #25).
 
 2. **Seed (Voronoi + Imhof).** Each label gets a starting side. We compute a Voronoi
    cell per anchor and place the label at its most-preferred slot under the Imhof

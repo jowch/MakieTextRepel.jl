@@ -76,15 +76,25 @@ function Makie.plot!(p::TextRepel)
         Rect2f(0, 0, Float32.(widths(vp))...)
     end
 
-    # 2. Measure + solve. Recomputes when anchors/text/font/size or params change.
-    solved = lift(p.px_anchors, p.text, p.fontsize, p.font,
+    # 2a. Measure label boxes. Depends ONLY on text/fontsize/font — the three
+    #     measure-invalidating inputs (#25) — so it is NOT re-run when positions
+    #     or any solve-only param change (the movie/animation reuse case). Makie's
+    #     reactive graph reuses the cached sizes whenever measurement can't change.
+    measured_sizes = lift(p.text, p.fontsize, p.font) do labels, fs, font
+        measure_labels(labels, font, fs, 1.0)
+    end
+
+    # 2b. Solve. Consumes the cached `measured_sizes`; re-runs on anchor/param
+    #     changes while reusing measurements. `sizes` is threaded back into the
+    #     result tuple so every downstream node (box_rects, seg_points,
+    #     computed_sizes) is unchanged.
+    solved = lift(p.px_anchors, measured_sizes,
                   p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
-                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs, p.min_segment_length,
-                  p.markersize, p.init_state, p.obstacles) do px, labels, fs, font,
-                                                              fr, frp, fpl, mi, om,
-                                                              bp, pp, mo, bnds, ml, ms, is, obs
+                  p.box_padding, p.point_padding, p.max_overlaps, bounds_obs,
+                  p.min_segment_length, p.markersize, p.init_state, p.obstacles) do px, sizes,
+                                                          fr, frp, fpl, mi, om,
+                                                          bp, pp, mo, bnds, ml, ms, is, obs
         anchors = [Point2f(q[1], q[2]) for q in px]
-        sizes = measure_labels(labels, font, fs, 1.0)
         # markersize (sibling scatter) overrides point_padding when set. textrepel!
         # draws no markers; this only declares the sibling size for clearance.
         eff_pp = if ms === nothing
@@ -101,16 +111,11 @@ function Makie.plot!(p::TextRepel)
                                box_padding = Float64(bp), point_padding = eff_pp,
                                max_overlaps = Float64(mo), bounds = bnds,
                                min_segment_length = Float64(ml))
-        # `bounds_obs` (lines 69-71) always yields a Rect2f, so `bnds` is never
-        # `nothing` on the recipe path — feed it straight through to the pipeline.
-        # `bounds = bnds` is set in `params` (above) *and* passed positionally below;
-        # `solve_cluster` overrides params.bounds from the positional arg, so the two
-        # agree. The set in `params` is intentional, not redundant: `params` is exposed
-        # as `computed_params`, and downstream (e.g. the Task 5 byte-identity guard)
-        # reads `computed_params.bounds` to re-derive the same solve — it must be the
-        # real Rect2f, not `nothing`.
-        # Full placement strategy lives in the seam now (voronoi-seed → side-select →
-        # crossing-repair → constraint-projection legalize).
+        # `bounds_obs` always yields a Rect2f, so `bnds` is never `nothing` here.
+        # `bounds = bnds` is set in `params` (exposed as `computed_params`) AND passed
+        # positionally; `solve_cluster` overrides params.bounds from the positional arg,
+        # so the two agree. Full placement strategy lives in the seam (voronoi-seed →
+        # side-select → crossing-repair → constraint-projection legalize).
         # The two animation attrs (`init_state`, `obstacles`) are also threaded in here:
         # `nothing`/`Rect2f[]` defaults reproduce the unchanged fresh-placement path.
         # Coerce to the seam's expected types; `is` nothing = fresh, `obs` empty = none.
