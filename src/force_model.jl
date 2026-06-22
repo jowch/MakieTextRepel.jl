@@ -4,7 +4,7 @@
 # `AbstractClusterSolver` seam (wrapped by solvers/force.jl as `ForceSolver`).
 # The default solver is `ProjectionSolver` (solvers/projection.jl). `RepelParams`
 # and the shared `_constrain` axis-lock helper live in params.jl.
-# `_GOLDEN_ANGLE` is also defined in params.jl (shared by the default-path init).
+# `_GOLDEN_ANGLE` lives in params.jl (shared with the default-path init).
 
 """
 Deterministic initial offsets. Each label gets a golden-angle direction sized
