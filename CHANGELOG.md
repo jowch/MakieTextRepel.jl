@@ -7,10 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing has been tagged, released, or registered yet — everything below is the
-pending first release (distribution is gated on issue #5, the `[sources]` URL
-flip). The internal `Project.toml` version bumps during development tracked
-milestones only; because no version was ever published, there are **no
+Nothing has been tagged or registered yet — everything below is the pending
+first release. The internal `Project.toml` version bumps during development
+tracked milestones only; because no version was ever published, there are **no
 user-facing breaking changes** to report.
 
 ### Added
@@ -98,7 +97,7 @@ user-facing breaking changes** to report.
 
 - Pure axis-aligned bounding-box primitives (overlap/point push, box-edge clipping,
   viewport clamping), independent of Makie.
-- Render-free text measurement via the (unregistered) TextMeasure.jl.
+- Render-free text measurement via TextMeasure.jl.
 - Connector leader-line segments in pixel space, with anchor-end trimming
   (`point_padding`), label-edge clipping, and a `min_segment_length` visibility
   filter.

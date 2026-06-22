@@ -12,14 +12,14 @@ through `TextRepelAlgorithm`. (Reproduce with [`examples/readme_example.jl`](exa
 
 ## Installation
 
-MakieTextRepel depends on the (currently unregistered) TextMeasure.jl. Until both are
-registered:
-
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/jowch/TextMeasure.jl")
 Pkg.add(url="https://github.com/jowch/MakieTextRepel.jl")
 ```
+
+Its measurement dependency, [TextMeasure.jl](https://github.com/jowch/TextMeasure.jl),
+is in the General registry and resolves automatically. Once MakieTextRepel is itself
+registered, `Pkg.add("MakieTextRepel")` will be all you need.
 
 ## Usage
 

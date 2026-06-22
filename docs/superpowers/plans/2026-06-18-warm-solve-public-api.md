@@ -17,7 +17,6 @@
 - Package version stays `0.1.0`. Do not bump or coin a version label.
 - Determinism wording must be backed by the existing passing test `"ProjectionSolver: deterministic"` (`test/test_projection_solver.jl`) — claim only what that test proves (same inputs ⇒ byte-identical `offsets`/`dropped`), and note the one carve-out: exactly-coincident anchors still fan out deterministically (this is reproducible, not nondeterministic).
 - Run the suite once, tee to `test/output/test-<agent-id>.log`, then grep — never re-run without a code change (per CLAUDE.md). `test/output/` is gitignored.
-- **Worktree `[sources]` trap (execution caveat):** this package's `Project.toml` `[sources]` points at the sibling `../TextMeasure.jl` by relative path. If you execute this plan inside a git worktree (e.g. under `.claude/worktrees/`), running `Pkg.test()`/`Pkg.resolve()` can **rewrite that relative `[sources]` path** — the exact failure that bit PR #11. Before any `Pkg.test()` from a worktree, symlink the sibling `../TextMeasure.jl` checkout beside the worktree, and never commit a rewritten `Project.toml` `[sources]`. Running in the main checkout sidesteps this entirely.
 
 ---
 
