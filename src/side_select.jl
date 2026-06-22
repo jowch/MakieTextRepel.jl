@@ -93,10 +93,10 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
             b   = box_at(anchors[i], s[i], psizes[i])
             bm  = box_at(anchors[i], s[i], sizes[i])
             for j in (i+1):n
-                (overlap_push(b, box_at(anchors[j], s[j], psizes[j])) != Vec2f(0, 0)) && (hard += 1)
+                boxes_overlap(b, box_at(anchors[j], s[j], psizes[j])) && (hard += 1)
             end
             for ob in obstacles
-                (overlap_push(b, ob) != Vec2f(0, 0)) && (hard += 1)
+                boxes_overlap(b, ob) && (hard += 1)
             end
             for j in 1:n
                 j == i && continue
@@ -120,11 +120,11 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
                 ov = 0
                 for j in 1:n
                     j == i && continue
-                    (overlap_push(b, box_at(anchors[j], sel[j], psizes[j])) != Vec2f(0, 0)) && (ov += 1)
+                    boxes_overlap(b, box_at(anchors[j], sel[j], psizes[j])) && (ov += 1)
                     point_covered(anchors[j], bm, p) && (ov += 1)
                 end
                 for ob in obstacles
-                    (overlap_push(b, ob) != Vec2f(0, 0)) && (ov += 1)
+                    boxes_overlap(b, ob) && (ov += 1)
                 end
                 key = (ov, sqrt(Float64(o[1])^2 + Float64(o[2])^2), rank)
                 if key < bestkey; bestkey = key; besto = o; bestrank = rank; end

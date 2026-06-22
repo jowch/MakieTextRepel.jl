@@ -4,8 +4,7 @@
 # `AbstractClusterSolver` seam (wrapped by solvers/force.jl as `ForceSolver`).
 # The default solver is `ProjectionSolver` (solvers/projection.jl). `RepelParams`
 # and the shared `_constrain` axis-lock helper live in params.jl.
-
-const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
+# `_GOLDEN_ANGLE` is also defined in params.jl (shared by the default-path init).
 
 """
 Deterministic initial offsets. Every label gets a per-index golden-angle
@@ -51,7 +50,7 @@ function compute_drops(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
         count = 0
         for j in 1:n
             i == j && continue
-            overlap_push(boxes[i], boxes[j]) != Vec2f(0, 0) && (count += 1)
+            boxes_overlap(boxes[i], boxes[j]) && (count += 1)
         end
         dropped[i] = count > max_overlaps
     end

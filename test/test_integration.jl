@@ -14,6 +14,14 @@ using MakieTextRepel
     @test pl isa MakieTextRepel.TextRepel
 end
 
+@testset "textrepel (non-bang) smoke test" begin
+    # The exported non-bang form builds its own Figure/Axis and returns a
+    # FigureAxisPlot whose `.plot` is the recipe object.
+    fap = textrepel(Point2f[(1, 1), (2, 2)]; text = ["a", "b"])
+    @test fap isa Makie.FigureAxisPlot
+    @test fap.plot isa MakieTextRepel.TextRepel
+end
+
 @testset "textrepel end-to-end (plain text)" begin
     fig = Figure(size = (400, 400))
     ax = Axis(fig[1, 1])
@@ -392,6 +400,9 @@ end
     # a solve-only `box_padding` change re-measures (+1 call); with the split it reuses the
     # cached `measured_sizes` node (+0). A measure-input (`text`) change re-measures in both.
     measure_calls = Ref(0)
+    # NOTE: the two "Method definition measure_labels(...) overwritten" WARNINGs this
+    # block prints (here and at the `finally` restore) are EXPECTED — they are how we
+    # swap in / out the call-counting instrumentation. Do not try to "fix" them.
     try
         @eval MakieTextRepel function measure_labels(labels, font, fontsize::Real, ppu::Real)
             $(measure_calls)[] += 1

@@ -122,9 +122,9 @@ function Makie.plot!(p::TextRepel)
         # (`obstacles` defaults to `Rect2f[]`, never `nothing`, so no nothing-guard needed.)
         is_v  = is === nothing ? nothing : Vector{Vec2f}(is)
         obs_v = Vector{Rect2f}(obs)
-        offsets, dropped, _, _ = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds;
-                                               init_state = is_v, obstacles = obs_v)
-        (; anchors, sizes, offsets, dropped, params)
+        sol = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds;
+                            init_state = is_v, obstacles = obs_v)
+        (; anchors, sizes, offsets = sol.offsets, dropped = sol.dropped, params)
     end
 
     # Expose offsets for testing / downstream use. NOTE: in Makie 0.24 `p.attributes`

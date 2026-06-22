@@ -44,10 +44,10 @@ function drop_most_overlapped!(dropped::BitVector, anchors::Vector{Point2f},
         ov = 0
         for j in 1:n
             (j == i || dropped[j]) && continue
-            (overlap_push(bi, box_at(anchors[j], offsets[j], psizes[j])) != Vec2f(0, 0)) && (ov += 1)
+            boxes_overlap(bi, box_at(anchors[j], offsets[j], psizes[j])) && (ov += 1)
         end
         for ob in obstacles
-            (overlap_push(bi, ob) != Vec2f(0, 0)) && (ov += 1)
+            boxes_overlap(bi, ob) && (ov += 1)
         end
         if ov > bestov || (ov == bestov && i > bestidx)   # ties → highest index
             bestov = ov; bestidx = i

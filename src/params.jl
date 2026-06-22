@@ -5,6 +5,12 @@
 # `ForceSolver`/`solve_repel` in force_model.jl), so it lives here, above the
 # solver seam, rather than inside either solver's file.
 
+# Golden angle (radians). Used by both the default-path `init.jl` (deterministic
+# fan-out of exactly-coincident anchors) and the fallback `force_model.jl`
+# (initial-offset spiral), so it lives here in shared config rather than in either
+# solver's file.
+const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
+
 """Solver parameters. All distances in pixels."""
 Base.@kwdef struct RepelParams
     force::NTuple{2,Float64}        = (1.0, 1.0)

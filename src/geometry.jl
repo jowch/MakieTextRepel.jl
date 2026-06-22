@@ -32,6 +32,9 @@ function overlap_push(a::Rect2f, b::Rect2f)
     return _aniso_push(d, ox, oy)
 end
 
+"""`true` if boxes `a` and `b` overlap (their interiors intersect) — i.e. `overlap_push` is nonzero."""
+boxes_overlap(a::Rect2f, b::Rect2f) = overlap_push(a, b) != Vec2f(0, 0)
+
 """
 Push box away from point `p` if `p` lies within the box expanded by `padding`.
 Zero vector otherwise. Uses the same aligned-axis-safe scheme as `overlap_push`.
