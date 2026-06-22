@@ -6,14 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MakieTextRepel.jl is a `ggrepel`/`adjustText`-style label-repel package for [Makie](https://docs.makie.org). It ships three surfaces over the same deterministic solver: `textrepel!` (a standalone Makie recipe with the full feature set — solver, dropping, background boxes, connector trimming; also accepts `init_state`/`obstacles` for animated re-solves, and reuses text measurements across position/solve-param-only updates so animations don't re-measure — #25), `TextRepelAlgorithm` (a plug-in for `Makie.annotation!` that reuses the solver underneath `annotation!`'s styling — `Ann.Styles.LineArrow()`, custom paths, arrow heads), and `warm_solve` (the exported stateless warm-start primitive — `(anchors, sizes, bounds; init_state, pin_mask, pinned_offsets, obstacles, …) -> (; offsets, dropped, iter, residual)` — a render-free face over the internal `solve_cluster`/`ProjectionSolver` seam for per-frame animation consumers; see `src/warm_solve.jl`; the exported `measure_labels` produces its `sizes`). Julia 1.11, Makie 0.24.
 
-## Dependency note (important)
+## Dependency note
 
-This package depends on the **unregistered** TextMeasure.jl (`jowch/TextMeasure.jl`) for render-free text measurement. `Project.toml` `[sources]` currently points at a **local sibling checkout** (`../TextMeasure.jl`), so a clone of that repo must exist beside this one. CI clones it explicitly (see `.github/workflows/CI.yml`). Switching `[sources]` from the relative path to the `{url = "..."}` form is a tracked release-blocker (issue #5) — do not flip it until TextMeasure's `main` is pushed.
+This package depends on TextMeasure.jl (`jowch/TextMeasure.jl`) for render-free text measurement. As of v0.1.0 (2026-06-21) TextMeasure is **registered in the General registry**, so it resolves like any normal dependency — the old `Project.toml` `[sources]` local-path entry and the CI clone step have both been removed (release-blocker #5 resolved). A bounded `TextMeasure = "0.1"` `[compat]` is in place. No sibling checkout is needed; `Pkg.instantiate()` pulls it from General.
 
 ## Setup & dev loop
 
 ```bash
-# First-time setup (needs the sibling ../TextMeasure.jl checkout — see above):
+# First-time setup (TextMeasure now resolves from the General registry):
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
 # Fast iteration without paying Pkg.test() each time. The package env (--project=.)
