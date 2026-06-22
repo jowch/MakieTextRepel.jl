@@ -13,7 +13,7 @@ anyov(anchors, sel, psizes) = any(
     # side_select minimizes (overlaps·W + ‖offset‖). With no conflict the cost is pure
     # leader length, so a wide label (30×16: half-height 8 < half-width 15) goes to T
     # (offset (0,8), leader 8) — NOT the seed's TR (leader 17). This leader-minimizing
-    # override of the Imhof seed is exactly the §7e win; the seed only sets the start.
+    # override of the Imhof seed is the behavior under test; the seed only sets the start.
     p = RepelParams()
     bounds = Rect2f(0, 0, 400, 400)
     anchors = [Point2f(100, 100), Point2f(300, 300)]   # far apart, no conflict

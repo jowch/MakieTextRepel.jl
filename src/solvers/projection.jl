@@ -1,16 +1,13 @@
-# solvers/projection.jl — ProjectionSolver: side-select → repair → legalize, with
-# geometric over-capacity dropping and read-only Q diagnostics. Composes the pure
-# layers; the only AbstractClusterSolver that touches solver-internal types here.
+# solvers/projection.jl — ProjectionSolver: side-select → repair → legalize, geometric
+# drop loop, read-only Q diagnostics. Composes the pure layers.
 
-# Concrete shape of the Q-diagnostics tuple. Using a concrete alias (rather than an
-# abstract `NamedTuple`) keeps the `stats` Ref type-stable and enforces the same field
-# set/types at every write site: the constructor below, `solve_cluster`, and the
-# annotation all-pinned bypass. Field order matches those write sites (no conversion).
+# Concrete NamedTuple alias keeps the stats Ref type-stable and enforces the same
+# field set/order at every write site (constructor, solve_cluster, all-pinned bypass).
 const ProjectionStats = NamedTuple{(:overlaps, :point_overlaps, :mean_leader, :crossings, :iter, :residual, :dropped),
                                    Tuple{Int, Int, Float32, Int, Int, Float32, Int}}
 
 """
-`ProjectionSolver` carries `RepelParams` and a `stats` Ref holding the last solve's
+`ProjectionSolver` carries `RepelParams` and a `stats` Ref for the last solve's
 Q diagnostics `(overlaps, point_overlaps, mean_leader, crossings, iter, residual, dropped)`.
 """
 struct ProjectionSolver <: AbstractClusterSolver
@@ -24,12 +21,10 @@ ProjectionSolver(params::RepelParams) =
                                                      iter = 0, residual = 0f0, dropped = 0)))
 
 """
-Mark the still-active, non-pinned label whose padded box overlaps the most other
-active boxes **and obstacles** (ties → highest index) as dropped. Counting obstacle
-overlaps matters when a round's residual comes purely from a label-vs-obstacle
-penetration: without it, such a label scores `ov = 0` and the highest-index `ov = 0`
-fallback could drop the wrong label. Returns the dropped index (0 if none eligible).
-Deterministic.
+Drop the still-active, non-pinned label whose padded box overlaps the most other
+active boxes and obstacles (ties → highest index). Obstacle overlaps are counted so a
+label-vs-obstacle residual doesn't score `ov = 0` and cause a wrong fallback drop.
+Returns the dropped index (0 if none eligible).
 """
 function drop_most_overlapped!(dropped::BitVector, anchors::Vector{Point2f},
                                offsets::Vector{Vec2f}, psizes::Vector{Vec2f},
@@ -44,10 +39,10 @@ function drop_most_overlapped!(dropped::BitVector, anchors::Vector{Point2f},
         ov = 0
         for j in 1:n
             (j == i || dropped[j]) && continue
-            (overlap_push(bi, box_at(anchors[j], offsets[j], psizes[j])) != Vec2f(0, 0)) && (ov += 1)
+            boxes_overlap(bi, box_at(anchors[j], offsets[j], psizes[j])) && (ov += 1)
         end
         for ob in obstacles
-            (overlap_push(bi, ob) != Vec2f(0, 0)) && (ov += 1)
+            boxes_overlap(bi, ob) && (ov += 1)
         end
         if ov > bestov || (ov == bestov && i > bestidx)   # ties → highest index
             bestov = ov; bestidx = i
@@ -66,8 +61,8 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
     p = RepelParams(s.params; bounds = bounds)
     n = length(anchors)
 
-    # Mirror solve_repel's input validation (src/force_model.jl). Matters most on the
-    # WARM path, where initial_offsets isn't called to catch a mismatch for us.
+    # Input validation — mirrors solve_repel (force_model.jl). Critical on the warm
+    # path, where initial_offsets isn't called to catch a mismatch first.
     if pin_mask !== nothing
         length(pin_mask) == n || throw(DimensionMismatch(
             "pin_mask length $(length(pin_mask)) does not match anchors length $n"))
@@ -90,10 +85,8 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
                               obstacles = obstacles)
         repair_crossings!(offsets, anchors, sizes, falses(n), p;
                           min_len = p.min_segment_length, pin_mask = pin_mask)
-    else                            # RELAX / warm-start: legalize the given layout only.
-        # Mirror solve_repel's init_state contract: constrain to only_move, and hold
-        # pinned labels at their fixed offset (the caller's pinned_offsets), not the
-        # warm value. Without this, pinned labels would be legalized away from their pin.
+    else                            # WARM: legalize the given layout only.
+        # Constrain axes and restore pinned offsets (don't legalize pinned labels away).
         offsets = [_constrain(o, p.only_move) for o in init_state]
         if pin_mask !== nothing
             for i in 1:n
@@ -102,14 +95,13 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
         end
     end
 
-    # Marker keep-out half-extent (signed). A label node carries padded half-extent
-    # (unpadded_half + box_padding); a fixed keep-out node of half-extent mc separates
-    # the pair to unpadded_half + point_padding ⇒ text edge clears the marker by exactly
-    # point_padding (independent of box_padding), matching point_covered.
+    # Marker keep-out half-extent. Label half-extent = unpadded_half + box_padding.
+    # A fixed keep-out of half-extent mc separates to unpadded_half + point_padding,
+    # so the text edge clears the marker by exactly point_padding (matches point_covered).
     mc = Float32(p.point_padding - p.box_padding)
 
-    # Run the legalize → over-capacity-drop loop to convergence on a *given* offsets vector.
-    # Returns (offsets, dropped, lz). Pure w.r.t. its inputs (mutates only locals).
+    # Legalize → drop loop to convergence on a given offsets vector.
+    # Returns (offsets, dropped, lz). Mutates only locals.
     function legalize_and_drop(start_offsets::Vector{Vec2f})
         offs = copy(start_offsets)
         drp  = falses(n)
@@ -133,12 +125,12 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
                 w_psizes[m + t]  = Vec2f(ob.widths)
                 w_fixed[m + t]   = true
             end
-            # Marker keep-out: every anchor (own + foreign, incl. dropped/pinned), fixed
-            # + soft, ascending index → deterministic, round-invariant Dykstra order.
+            # Marker keep-outs: all anchors (own + foreign, incl. dropped/pinned), fixed +
+            # soft, ascending index → deterministic Dykstra order, stable across rounds.
             for i in 1:n
                 w_anchors[m + k + i] = anchors[i]
                 w_offsets[m + k + i] = Vec2f(0, 0)
-                w_psizes[m + k + i]  = Vec2f(2mc, 2mc)   # psize is full width; mc is the half-extent
+                w_psizes[m + k + i]  = Vec2f(2mc, 2mc)   # psize = full width; mc is the half-extent
                 w_fixed[m + k + i]   = true
                 w_soft[m + k + i]    = true
             end
@@ -155,18 +147,14 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
     end
 
     offsets, dropped, lz = legalize_and_drop(offsets)
-    total_rounds = lz.rounds_used   # accumulates legalize rounds across the swap search too,
-                                    # so reported `iter` reflects the whole solve, not just the
-                                    # final accepted swap's legalize pass.
+    total_rounds = lz.rounds_used   # accumulates across swap rounds; iter reflects whole solve.
 
-    # Stage 3 Part B: swap-based local search to drive crossings to zero. Scan all crossing
-    # pairs for the first swap whose post-legalize key strictly improves, adopt it, restart.
-    # swapkey = (dropped_count, overlaps+point_overlaps, crossings, mean_leader): the top
-    # dropped_count level forbids killing a crossing by dropping a label; overlaps dominate
-    # crossings dominate leader. Each adopted swap strictly decreases swapkey over the finite
-    # swap-reachable layout set ⇒ terminates (crossing-free or local fixpoint) within the cap.
-    # Deterministic (index-ordered, no RNG). Residual crossings (conflict, or a 2-opt-resistant
-    # 3-cycle) are an honest escape hatch reported via solve_stats + the @warn below.
+    # Swap-based crossing elimination. Scan crossing pairs; adopt the first swap whose
+    # post-legalize swapkey = (dropped_count, overlaps+point_overlaps, crossings, mean_leader)
+    # strictly improves; restart. Terminates: each accepted swap strictly decreases swapkey
+    # over the finite swap-reachable set (no RNG; index-ordered). Residual crossings (a
+    # 2-opt-resistant 3-cycle or true conflict) escape with a @warn; overlaps always outrank
+    # crossings — zero-overlap is never traded for fewer crossings; dropped_count outranks all.
     UNCROSS_ROUNDS = 50
     swapkey(offs, drp) = let q = label_cost(anchors, sizes; offsets = offs, bounds = bounds,
                                             dropped = drp, box_padding = p.box_padding,

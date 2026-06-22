@@ -1,5 +1,7 @@
 # MakieTextRepel.jl
 
+[![CI](https://github.com/jowch/MakieTextRepel.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/jowch/MakieTextRepel.jl/actions/workflows/CI.yml)
+
 A `ggrepel`/`adjustText`-style label-repel recipe for [Makie](https://docs.makie.org).
 Automatically displaces overlapping text labels and draws connector lines back to
 their data points.
@@ -12,14 +14,14 @@ through `TextRepelAlgorithm`. (Reproduce with [`examples/readme_example.jl`](exa
 
 ## Installation
 
-MakieTextRepel depends on the (currently unregistered) TextMeasure.jl. Until both are
-registered:
-
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/jowch/TextMeasure.jl")
 Pkg.add(url="https://github.com/jowch/MakieTextRepel.jl")
 ```
+
+Its measurement dependency, [TextMeasure.jl](https://github.com/jowch/TextMeasure.jl),
+is in the General registry and resolves automatically. Once MakieTextRepel is itself
+registered, `Pkg.add("MakieTextRepel")` will be all you need.
 
 ## Usage
 

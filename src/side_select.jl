@@ -1,25 +1,22 @@
 # side_select.jl — greedy discrete Imhof-slot refinement. Pure, GeometryBasics-only.
 #
-# Each label's candidate offsets are its in-bounds Imhof slots (constrained by
-# only_move). Seeded from the Voronoi-informed init, then refined by index-ordered
-# greedy sweeps minimizing the lexicographic key
+# Candidates: in-bounds Imhof slots, constrained by only_move. Seeded from
+# Voronoi-informed init, refined by index-ordered greedy sweeps minimizing
 #   (hard_overlaps, leader_length, imhof_rank)
-# where hard_overlaps counts label–label box overlaps, label–obstacle overlaps, AND
-# label–marker point overlaps (foreign anchors covered by the label box). Overlap
-# avoidance provably dominates leader length; rank (Imhof slot order, TR=0…TL=7)
-# breaks exact-leader ties toward the upper/right slot and never lengthens a leader.
-# Pinned labels are fixed; obstacles are fixed boxes; a label never avoids its own
-# anchor. Deterministic.
+# hard_overlaps: label–label + label–obstacle + label–marker point overlaps
+# (W_pt = W_lap: marker point overlaps count at the same level as box overlaps).
+# rank: Imhof slot index TR=0…TL=7; breaks exact-leader ties toward upper/right,
+# never lengthens a leader. Pinned labels fixed; obstacles fixed boxes; a label
+# never avoids its own anchor. Deterministic.
 
 """
     side_select(anchors, sizes, psizes, bounds, seed, params;
                 pin_mask=nothing, pinned_offsets=Vec2f[], obstacles=Rect2f[],
                 passes=6) -> Vector{Vec2f}
 
-Pick, per label, the Imhof slot minimizing the lexicographic key
-`(hard_overlaps, leader_length, imhof_rank)`. `psizes` are padded sizes. `seed[i]` is
-the Voronoi-informed initial offset used to choose the starting slot. Returns the
-chosen offset per label.
+Per label, pick the Imhof slot minimizing `(hard_overlaps, leader_length, imhof_rank)`.
+`psizes` are padded sizes. `seed[i]` is the Voronoi-informed initial offset for slot
+seeding. Returns one offset per label.
 """
 function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
                      psizes::Vector{Vec2f}, bounds::Rect2f,
@@ -73,18 +70,12 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
         end
     end
 
-    # Lexicographic arrangement key: (hard_overlaps, leader, ranksum). hard_overlaps =
-    # label–label overlap pairs + label–marker point overlaps (W_pt = W_lap: same lex
-    # level). leader = total leader length (second tiebreak). ranksum = sum of Imhof ranks
-    # (third tiebreak — breaks exact-leader ties toward upper/right slots, never lengthens
-    # a leader). Compared with Julia tuple `<` (lexicographic). Greedy best-response is NOT
-    # globally monotone and can 2-cycle, so we keep the best arrangement seen across passes
-    # rather than trusting the last pass. Obstacle overlaps are counted once per
-    # (label, obstacle) pair, consistent with the greedy `ov` below.
-    # Scores a full arrangement `s` with its per-label slot ranks `s_rank`. Takes `s_rank`
-    # explicitly (rather than capturing the outer `sel_rank`) so it is an honest function of
-    # its arguments — every level is derived from `(s, s_rank)`, never from mutable closure
-    # state that may diverge from `s`.
+    # Global arrangement key: (hard_overlaps, leader, ranksum).
+    # hard_overlaps: box–box pairs + (label,obstacle) pairs + marker point overlaps
+    # (W_pt = W_lap). leader: total leader length. ranksum: sum of Imhof ranks.
+    # Compared via Julia tuple `<`. Greedy best-response can 2-cycle, so we keep
+    # the best arrangement seen across passes. Takes explicit `s_rank` (not the
+    # outer `sel_rank`) so the key is a pure function of its arguments.
     function global_key(s, s_rank)
         hard = 0
         leader = 0.0
@@ -93,10 +84,10 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
             b   = box_at(anchors[i], s[i], psizes[i])
             bm  = box_at(anchors[i], s[i], sizes[i])
             for j in (i+1):n
-                (overlap_push(b, box_at(anchors[j], s[j], psizes[j])) != Vec2f(0, 0)) && (hard += 1)
+                boxes_overlap(b, box_at(anchors[j], s[j], psizes[j])) && (hard += 1)
             end
             for ob in obstacles
-                (overlap_push(b, ob) != Vec2f(0, 0)) && (hard += 1)
+                boxes_overlap(b, ob) && (hard += 1)
             end
             for j in 1:n
                 j == i && continue
@@ -120,11 +111,11 @@ function side_select(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
                 ov = 0
                 for j in 1:n
                     j == i && continue
-                    (overlap_push(b, box_at(anchors[j], sel[j], psizes[j])) != Vec2f(0, 0)) && (ov += 1)
+                    boxes_overlap(b, box_at(anchors[j], sel[j], psizes[j])) && (ov += 1)
                     point_covered(anchors[j], bm, p) && (ov += 1)
                 end
                 for ob in obstacles
-                    (overlap_push(b, ob) != Vec2f(0, 0)) && (ov += 1)
+                    boxes_overlap(b, ob) && (ov += 1)
                 end
                 key = (ov, sqrt(Float64(o[1])^2 + Float64(o[2])^2), rank)
                 if key < bestkey; bestkey = key; besto = o; bestrank = rank; end

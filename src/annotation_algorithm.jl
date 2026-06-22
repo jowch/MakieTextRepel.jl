@@ -1,4 +1,4 @@
-# annotation_algorithm.jl — algorithm plug-in for Makie.annotation!
+# annotation_algorithm.jl — Makie.annotation! algorithm plug-in.
 
 export TextRepelAlgorithm, solve_stats
 
@@ -8,50 +8,40 @@ export TextRepelAlgorithm, solve_stats
                          obstacles = Rect2f[], ...)
     TextRepelAlgorithm(params::RepelParams; obstacles = Rect2f[])
 
-An algorithm plug-in for `Makie.annotation!`. Uses MakieTextRepel's
-`ProjectionSolver` (side-select → legalize) to place non-overlapping
-labels around data points.
+`Makie.annotation!` algorithm plug-in. Runs `ProjectionSolver`
+(side-select → legalize) for non-overlapping label placement.
 
-Supports per-label pinning: set entries of `textpositions_offset` to
-fixed values to lock those labels and let the solver place the rest.
-Honors `reset = false` from `annotation!`'s compute graph to warm-start
-solves under `advance_optimization!`.
+Per-label pinning: finite entries in `textpositions_offset` pin those
+labels; the solver places the rest. Honors `reset = false` to warm-start
+under `advance_optimization!`.
 
-`obstacles` is a `Vector{Rect2f}` in pixel space — the same coordinate
-system `annotation!` uses internally. Convert a data-space rectangle
-with `Makie.project`.
+`obstacles`: `Vector{Rect2f}` in pixel space (same as `annotation!`
+internals). Convert data-space rectangles with `Makie.project`.
 
 ## Key defaults
 
-- `point_padding` defaults to `5.0` (pixels) on this surface. This
-  provides a minimum clearance (marker clearance floor) between each
-  data point (anchor) and any non-pinned label's bounding box. It is a
-  generic anchor keep-out: the solver treats the anchor as a point
-  obstacle and pushes label boxes at least `point_padding` px away.
-  Pass `point_padding = 0.0` explicitly to disable clearance.
-  Note: a pinned label whose user-supplied offset places its own box
-  over its own marker is held bit-identically — it is neither pushed
-  nor dropped.
+- `point_padding` defaults to `5.0` px: minimum clearance between each
+  anchor and any non-pinned label box. Pass `point_padding = 0.0` to
+  disable. A pinned label placed over its own marker is held
+  bit-identically — not pushed or dropped.
 
 ## Caveats
 
-- Pinning a label so that its data anchor falls strictly inside the
-  rendered bbox suppresses that label's connector line. This is
-  `annotation!`'s `p2 in offset_bb && return` behavior, not a wrapper
-  bug.
-- `bounds`/`max_overlaps` misuse warnings fire once per session (Julia's
-  standard logger `maxlog=1` contract), so constructing multiple
-  algorithm instances with the same mistake yields one warning total.
-- `solve_stats` returns the Q diagnostics `(overlaps, point_overlaps, mean_leader,
-  crossings, iter, residual, dropped)` of the **most recent** solve.
-  A single `TextRepelAlgorithm` instance shared across multiple plots
-  reports only the last one to call `calculate_best_offsets!`. Use
-  separate instances per plot if you need per-plot diagnostics.
+- Pinning a label with its anchor strictly inside the rendered bbox
+  suppresses that label's connector. This is `annotation!`'s
+  `p2 in offset_bb && return` behavior, not a wrapper bug.
+- `bounds`/`max_overlaps` misuse warnings fire once per session
+  (`maxlog=1`); multiple bad-kwarg instances yield one warning total.
+- `solve_stats` returns Q diagnostics `(overlaps, point_overlaps, mean_leader,
+  crossings, iter, residual, dropped)` for the **most recent** solve.
+  An instance shared across plots reports only the last
+  `calculate_best_offsets!` call. Use separate instances for per-plot
+  diagnostics.
 
 ## Scope
 
-`max_overlaps` and background boxes are `textrepel!`-only — they have
-no equivalent in `annotation!`'s algorithm contract.
+`max_overlaps` and background boxes are `textrepel!`-only; no equivalent
+in `annotation!`'s algorithm contract.
 
 See also: [`textrepel!`](@ref), [`solve_stats`](@ref).
 """
@@ -115,9 +105,8 @@ function Makie.calculate_best_offsets!(
 
     T = eltype(offsets)
 
-    # Per-label pinning detection: finite textpositions_offset[i] entries
-    # become pinned offsets in *render-space* (i.e., the displacement
-    # annotation! will use when rendering — text_bb.origin + offset).
+    # Finite textpositions_offset[i] → pinned offset in render-space
+    # (displacement annotation! uses: text_bb.origin + offset).
     pin_mask = BitVector([all(isfinite, p) for p in textpositions_offset])
     pinned_render = Vector{Vec2f}(undef, n)
     for i in 1:n
@@ -129,7 +118,7 @@ function Makie.calculate_best_offsets!(
         end
     end
 
-    # All-pinned: bypass solver. Render-space offsets pass through unchanged.
+    # All-pinned fast path: bypass solver, pass render-space offsets through.
     if all(pin_mask)
         for i in 1:n
             offsets[i] = T(pinned_render[i][1], pinned_render[i][2])
@@ -146,36 +135,28 @@ function Makie.calculate_best_offsets!(
         Float32(bbox.widths[1]),  Float32(bbox.widths[2]),
     )
 
-    # Coordinate translation between solver-space and render-space.
-    #
-    # The solver places bbox.center at `anchor + solver_offset` (it reasons
-    # about box centers). annotation! renders the bbox at
-    # `text_bb.origin + render_offset`, whose center is therefore
-    # `text_bb.origin + render_offset + widths/2`. Equating the two so the
-    # rendered bbox matches what the solver solved for:
-    #     render_offset = solver_offset - (text_bb.origin + widths/2 - anchor)
-    #                   = solver_offset - align_bias
-    # For centered text (text_bb.origin = anchor - widths/2) align_bias is
-    # zero; for L/R/T/B-aligned text it is non-zero and must be subtracted
-    # from every solver result before writeback, and added to every
-    # render-space input before handoff to the solver (including warm-start
-    # init_state and pinned obstacle positions).
+    # Solver-space vs render-space:
+    # Solver centers the box at anchor + solver_offset.
+    # annotation! renders at text_bb.origin + render_offset, center =
+    #   text_bb.origin + render_offset + widths/2.
+    # Equating:  render_offset = solver_offset - align_bias
+    #   where    align_bias = bbox_center - anchor
+    # (zero for centered text; non-zero for L/R/T/B alignment).
+    # Subtract align_bias on writeback; add it on inputs to the solver
+    # (warm init_state, pinned offsets).
     bbox_centers = [Point2f(bb.origin[1] + bb.widths[1]/2,
                             bb.origin[2] + bb.widths[2]/2) for bb in text_bbs]
     align_bias = Vec2f[Vec2f(c[1] - a[1], c[2] - a[2])
                        for (c, a) in zip(bbox_centers, anchors)]
 
-    # Pinned offsets: convert render-space → solver-space so the pinned
-    # bboxes act as obstacles at their *rendered* position.
+    # Pinned offsets: render-space → solver-space (pinned bboxes act as
+    # obstacles at their rendered positions).
     pinned_solver = Vec2f[pin_mask[i] ? pinned_render[i] + align_bias[i] :
                                         Vec2f(0, 0) for i in 1:n]
 
-    # Initial state for the seam:
-    # - reset=true: fresh placement → pass `nothing`; solve_cluster does voronoi-init
-    #   (Imhof slots, in solver-space) + crossing-repair. No align_bias needed on the
-    #   init: the writeback below subtracts align_bias, and rendered box-center =
-    #   anchor + solver_offset for any alignment.
-    # - reset=false: warm-start from the previous render-space offsets, translated to
+    # reset=true  → fresh placement (pass nothing; solve_cluster runs voronoi-init +
+    #   crossing repair in solver-space; no align_bias needed on init).
+    # reset=false → warm-start from previous render-space offsets, translated to
     #   solver-space by adding align_bias.
     init_state = reset ? nothing :
                  Vec2f[Vec2f(offsets[i][1], offsets[i][2]) + align_bias[i] for i in 1:n]
@@ -186,8 +167,8 @@ function Makie.calculate_best_offsets!(
                       pinned_offsets = pinned_solver,
                       obstacles      = alg.obstacles)
 
-    # Writeback: solver-space → render-space (subtract align_bias). Pinned indices
-    # recover pinned_render[i] exactly (solve_cluster holds them at pinned_solver[i]).
+    # Writeback: solver-space → render-space (subtract align_bias).
+    # Pinned labels recover pinned_render[i] exactly (held at pinned_solver[i]).
     for i in 1:n
         o = r.offsets[i] .- align_bias[i]
         if all(isfinite, o)

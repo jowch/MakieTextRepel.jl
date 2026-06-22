@@ -23,22 +23,9 @@ jobs:
             os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # MakieTextRepel depends on the as-yet-unregistered TextMeasure.jl via a
-      # [sources] local path; clone it as a sibling so the project resolves.
-      # Remove this step (and the [sources] entry) once TextMeasure is registered.
-      - name: Check out unregistered TextMeasure.jl dependency
-        run: git clone --depth 1 https://github.com/jowch/TextMeasure.jl ../TextMeasure.jl
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
-      - uses: julia-actions/julia-processcoverage@v1
-        if: matrix.version == '1.11' && matrix.os == 'ubuntu-latest'
-      - uses: codecov/codecov-action@v5
-        if: matrix.version == '1.11' && matrix.os == 'ubuntu-latest'
-        with:
-          files: lcov.info
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}

@@ -5,24 +5,20 @@
                box_padding, point_padding=0.0, min_segment_length)
         -> (; overlaps::Int, point_overlaps::Int, mean_leader::Float32, crossings::Int)
 
-Read-only quality measure of a placement. Never mutates, never feeds back into
-placement. Four independent components (reported separately, never collapsed):
+Read-only placement quality. Never mutates, never feeds back into placement.
+Four independent components (never collapsed):
 
-- `overlaps`  — count of label pairs whose padded boxes penetrate by > 0.5 px on
-  both axes (the visual-overlap threshold; sub-0.5 px touches are ignored).
-- `point_overlaps` — count of non-dropped labels covering a non-dropped foreign
-  anchor, via the shared `point_covered`, using `point_padding`.
-- `mean_leader` — mean ‖offset‖ (label displacement) over non-dropped labels
-  (0 if none). Note this is offset magnitude, not the padding-trimmed rendered
-  leader length.
+- `overlaps` — label pairs whose padded boxes penetrate > 0.5 px on both axes.
+- `point_overlaps` — non-dropped labels covering a non-dropped foreign anchor,
+  via `point_covered` with `point_padding`.
+- `mean_leader` — mean ‖offset‖ over non-dropped labels (0 if none).
+  Offset magnitude, not the padding-trimmed rendered leader length.
 - `crossings` — crossing leader pairs, via `connector_for` + `find_crossings`.
 
-Labels flagged in `dropped` are excluded from `overlaps`, `point_overlaps`, and
-`mean_leader` (they are render-suppressed) — a dropped label neither covers a
-marker nor is counted as a covered anchor. `box_padding`/`point_padding`/`min_segment_length`
-must match the recipe values so the crossing count agrees with what renders.
-`bounds` is accepted for call-shape parity with the recipe/solver and is
-currently unused (reserved for future viewport-aware metrics).
+Dropped labels are excluded from all four components.
+`box_padding`/`point_padding`/`min_segment_length` must match the recipe so the
+crossing count agrees with what renders. `bounds` is unused (call-shape parity
+with the recipe/solver; reserved for future viewport-aware metrics).
 """
 function label_cost(anchors::Vector{Point2f}, sizes::Vector{Vec2f};
                     offsets::Vector{Vec2f}, bounds::Rect2f,

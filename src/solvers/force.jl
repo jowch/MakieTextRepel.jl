@@ -1,6 +1,6 @@
-# solvers/force.jl — Force-directed cluster solver wrapping solve_repel.
+# solvers/force.jl — Force-directed solver; wraps solve_repel.
 
-"""ForceSolver carries `RepelParams` and dispatches to `solve_repel`."""
+"""ForceSolver carries `RepelParams`; dispatches to `solve_repel`."""
 struct ForceSolver <: AbstractClusterSolver
     params::RepelParams
 end
@@ -11,7 +11,7 @@ function solve_cluster(s::ForceSolver, anchors::Vector{Point2f}, sizes::Vector{V
                        pin_mask::Union{Nothing,BitVector}        = nothing,
                        pinned_offsets::Vector{Vec2f}             = Vec2f[],
                        obstacles::Vector{Rect2f}                 = Rect2f[])
-    # `RepelParams(base; ...)` (src/params.jl) copies s.params, overriding bounds.
+    # RepelParams(base; ...) copies s.params, overriding bounds.
     p = RepelParams(s.params; bounds = bounds)
     fresh = init_state === nothing
     init = fresh ?

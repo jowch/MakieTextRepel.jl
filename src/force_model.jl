@@ -4,23 +4,13 @@
 # `AbstractClusterSolver` seam (wrapped by solvers/force.jl as `ForceSolver`).
 # The default solver is `ProjectionSolver` (solvers/projection.jl). `RepelParams`
 # and the shared `_constrain` axis-lock helper live in params.jl.
-
-const _GOLDEN_ANGLE = Float32(π * (3 - sqrt(5)))
+# `_GOLDEN_ANGLE` lives in params.jl (shared with the default-path init).
 
 """
-Deterministic initial offsets. Every label gets a per-index golden-angle
-direction sized to escape its own (already padded) box, so the force loop
-starts with each anchor on or outside its label box. Subsumes the old
-"only fan out coincident anchors" behavior. Determinism: pure function of
-index and passed-in sizes.
-
-`psizes` is the *padded* size (the caller adds `2·box_padding`); `r` is the
-corner-distance of the padded box. The anchor lands *on* the box only at the
-four corner directions; at cardinal directions it lands `r − hw` (or `r − hh`)
-*outside* the box, so equilibrium distance after spring relaxation varies a few
-pixels by index. Acceptable for ggrepel-style layouts. The `1.0f0` floor only
-binds for degenerate zero-size labels with zero padding (e.g. empty strings);
-in normal layouts it never fires.
+Deterministic initial offsets. Each label gets a golden-angle direction sized
+to its padded box corner-distance, placing the anchor on or outside the box.
+`psizes` is padded size (caller adds `2·box_padding`). The `1.0f0` floor
+binds only for zero-size labels with zero padding.
 """
 function init_offsets(anchors::Vector{Point2f}, psizes::Vector{Vec2f}, p::RepelParams)
     n = length(anchors)
@@ -51,7 +41,7 @@ function compute_drops(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
         count = 0
         for j in 1:n
             i == j && continue
-            overlap_push(boxes[i], boxes[j]) != Vec2f(0, 0) && (count += 1)
+            boxes_overlap(boxes[i], boxes[j]) && (count += 1)
         end
         dropped[i] = count > max_overlaps
     end
@@ -106,10 +96,9 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
     final_residual = 0f0
 
     for it in 1:p.max_iter
-        # Step-cap cooling: linearly decay the per-iteration move cap so crowded,
-        # wall-pinned labels settle instead of limit-cycling. Deterministic. Applied
-        # only on the clamped path — the recipe always sets bounds, while the bare
-        # `bounds === nothing` solver path stays byte-identical to its pre-clamping output.
+        # Step-cap cooling: linear decay of the per-iteration move cap.
+        # DETERMINISM: `bounds === nothing` path is byte-identical to pre-clamping output;
+        # cooling and clamping only run when bounds is set. Preserve this when editing.
         smax = p.bounds === nothing ? smax0 :
                smax0 * max(0f0, 1f0 - Float32(it) / Float32(p.max_iter))
         boxes = [box_at(anchors[i], offsets[i], psizes[i]) for i in 1:n]
@@ -126,8 +115,7 @@ function solve_repel(anchors::Vector{Point2f}, sizes::Vector{Vec2f}, p::RepelPar
                 f = f .+ Vec2f(push[1] * fx, push[2] * fy)
             end
             for j in 1:n
-                # Own anchor included: keeps isolated labels off their own point.
-                # force_pull (below) provides the inward balance.
+                # Own anchor included; force_pull (below) provides inward balance.
                 pp = point_push(boxes[i], anchors[j], pad)
                 f = f .+ Vec2f(pp[1] * ppx, pp[2] * ppy)
             end

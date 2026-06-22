@@ -5,10 +5,9 @@ using DelaunayTriangulation
 const DT = DelaunayTriangulation
 
 """
-Test whether `box`'s four corners all lie inside the convex polygon `poly`.
-Uses sign-of-cross-product against each edge; consistent edge winding (CCW)
-required. Sufficient for boxes inside convex Voronoi cells (which remain
-convex after clipping with the convex viewport rectangle).
+True iff all four corners of `box` lie inside convex polygon `poly`.
+Uses sign-of-cross-product per edge; CCW winding required. Sufficient because
+Voronoi cells clipped to a convex viewport remain convex.
 """
 function box_inside_polygon(box::Rect2f, poly::GeometryBasics.Polygon)
     pts = decompose(Point2f, poly.exterior)
@@ -31,15 +30,14 @@ function box_inside_polygon(box::Rect2f, poly::GeometryBasics.Polygon)
 end
 
 """
-Compute Voronoi cells for `anchors` clipped to `viewport`. Returns a vector
-of length `length(anchors)` where each entry is either a `GeometryBasics.Polygon`
-(the clipped cell for that anchor, with CCW exterior) or `nothing` for anchors
-that are non-finite, coincident with another anchor, or part of an input with
-fewer than three distinct finite anchor coordinates.
+    voronoi_cells(anchors, viewport) -> Vector{Union{Polygon, Nothing}}
 
-Determinism: distinct coordinates are sorted lexicographically before triangulation;
-DT.jl's RNG is explicitly seeded with `MersenneTwister(0)`; cells are mapped back
-to all anchors via the (x, y) → cell dictionary.
+Voronoi cells for `anchors` clipped to `viewport`. Length equals `length(anchors)`.
+Each entry is a `GeometryBasics.Polygon` (CCW exterior) or `nothing` for non-finite,
+coincident, or degenerate-input anchors (fewer than three distinct finite coordinates).
+
+Determinism: distinct coordinates sorted lexicographically; DT.jl RNG seeded
+`MersenneTwister(0)`; cells mapped back via (x, y) → cell dict.
 """
 function voronoi_cells(anchors::Vector{Point2f}, viewport::Rect2f)
     n = length(anchors)
@@ -64,17 +62,15 @@ function voronoi_cells(anchors::Vector{Point2f}, viewport::Rect2f)
     distinct = sort!(collect(keys(counts)))
     length(distinct) < 3 && return cells   # all nothing
 
-    # All distinct points collinear → degenerate triangulation (circumcenter at ∞).
-    # DT.jl will warn + throw InexactError downstream; bail out cleanly instead.
+    # Collinear → degenerate circumcenters at ∞; bail before handing to DT.jl.
     if _all_collinear(distinct)
         return cells
     end
 
-    # 4. Triangulate distinct points; clip Voronoi cells to viewport.
-    # DT.jl can throw on degenerate inputs that slip past `_all_collinear` (e.g.,
-    # near-collinear at Float32 precision, four-points-on-a-circle, etc.). Catch
-    # any failure here and fall back to all-`nothing` so every label uses the TR
-    # Imhof slot rather than crashing the recipe's compute graph.
+    # 4. Triangulate; clip Voronoi cells to viewport.
+    # DT.jl can throw on inputs that slip past `_all_collinear` (near-collinear at
+    # Float32, four-on-a-circle, etc.). Catch and fall back to all-nothing so every
+    # label uses TR Imhof rather than crashing the compute graph.
     rng = MersenneTwister(0)
     points = [(Float64(p[1]), Float64(p[2])) for p in distinct]
     coord_to_cell = Dict{Tuple{Float32, Float32}, GeometryBasics.Polygon}()
@@ -94,8 +90,7 @@ function voronoi_cells(anchors::Vector{Point2f}, viewport::Rect2f)
     end
 
     # 6. Assign cells to non-coincident finite anchors only.
-    # An anchor with `counts[k] > 1` is coincident with at least one other label —
-    # leave its cell as `nothing` so both labels fall through to TR Imhof fallback.
+    # Coincident anchors (counts[k] > 1) get nothing → TR Imhof fallback for both.
     for i in 1:n
         finite[i] || continue
         k = (anchors[i][1], anchors[i][2])
@@ -105,12 +100,9 @@ function voronoi_cells(anchors::Vector{Point2f}, viewport::Rect2f)
     return cells
 end
 
-"""Return `true` if every point in `pts` lies on a single line. Assumes `length(pts) ≥ 2`.
-Used to bail out before handing DT.jl a degenerate point set (which it would warn
-about and then throw on during Voronoi clipping). The DT.jl wrapper in
-`voronoi_cells` catches any near-collinear case that slips past this guard, so a
-generous epsilon here is safe — we err on the side of fast TR fallback over
-crashing the compute graph."""
+"""True iff every point in `pts` lies on one line. Assumes `length(pts) ≥ 2`.
+Epsilon `_COLLINEAR_EPS` (1e-3 px²) absorbs Float32 rounding. The `try`/`catch`
+in `voronoi_cells` handles near-collinear inputs that slip past this guard."""
 const _COLLINEAR_EPS = 1f-3   # px²; loose enough to absorb Float32 rounding at typical pixel scales
 
 function _all_collinear(pts::Vector{Tuple{Float32, Float32}})

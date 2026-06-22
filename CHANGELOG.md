@@ -7,10 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing has been tagged, released, or registered yet — everything below is the
-pending first release (distribution is gated on issue #5, the `[sources]` URL
-flip). The internal `Project.toml` version bumps during development tracked
-milestones only; because no version was ever published, there are **no
+Nothing has been tagged or registered yet — everything below is the pending
+first release. The internal `Project.toml` version bumps during development
+tracked milestones only; because no version was ever published, there are **no
 user-facing breaking changes** to report.
 
 ### Added
@@ -46,10 +45,13 @@ user-facing breaking changes** to report.
   degrades to all-TR placement on degenerate inputs rather than crashing the
   compute graph.
 - Crossing repair (`src/crossings.jl`) — deterministic 2-opt position-swap pass,
-  bounded by `max_iter = 100`, `@warn` on cap-out. Under the default solver this is
-  **best-effort**: it runs before the final legalize, which can re-introduce a
-  crossing (crossings remain no worse than the in-tree `ForceSolver` on the
-  fixtures).
+  bounded by `max_iter = 100`, `@warn` on cap-out. It runs mid-pipeline (before the
+  final legalize, which can re-introduce a crossing); the default solver then runs a
+  **post-legalize swap-uncross** pass (`solvers/projection.jl`) that adopts offset
+  swaps whose re-legalized layout strictly improves, driving leader-line crossings to
+  zero on swap-reachable layouts (capped at `UNCROSS_ROUNDS = 50`, `@warn` on
+  residual). Zero overlap is never traded for fewer crossings, and a label is never
+  dropped to untangle.
 - **Marker-clearance floor — point-aware legalization (#21).** The default solver now
   treats every data anchor as a fixed keep-out of radius `point_padding`, so a label's
   text never sits under its own or a neighbour's scatter marker — enforced *after*
@@ -91,14 +93,14 @@ user-facing breaking changes** to report.
   `textpositions_offset` — finite ones become pinned offsets, `NaN` entries
   auto-place around them), warm-start under `advance_optimization!` (`reset=false`),
   and obstacle avoidance via `obstacles::Vector{Rect2f}`. `solve_stats(alg)` returns
-  the read-only quality functional `(; iter, residual, overlaps, point_overlaps,
-  mean_leader, crossings, dropped)` from the most recent solve.
+  the read-only quality functional `(; overlaps, point_overlaps, mean_leader,
+  crossings, iter, residual, dropped)` from the most recent solve.
 
 #### Geometry, measurement, connectors, styling
 
 - Pure axis-aligned bounding-box primitives (overlap/point push, box-edge clipping,
   viewport clamping), independent of Makie.
-- Render-free text measurement via the (unregistered) TextMeasure.jl.
+- Render-free text measurement via TextMeasure.jl.
 - Connector leader-line segments in pixel space, with anchor-end trimming
   (`point_padding`), label-edge clipping, and a `min_segment_length` visibility
   filter.

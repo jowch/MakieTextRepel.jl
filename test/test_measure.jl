@@ -79,7 +79,7 @@ end
     # ppu-independent, so old_measure(...) .* 2 reproduces the old * ppu, and a
     # single line has no line-drop term, so the post-scale is exact.
     # NOTE: multi-line at ppu!=1 is intentionally NOT golden-tested here — the
-    # 20px line-drop stub does not scale with ppu (see spec Known Limitations).
+    # 20px line-drop stub does not scale with ppu (a known limitation).
     sl    = rich("x", superscript("2"))
     got2  = only(measure_labels([sl], font, 24.0, 2.0))
     want2 = old_measure(sl, font, 24.0) .* 2.0

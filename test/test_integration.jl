@@ -14,6 +14,14 @@ using MakieTextRepel
     @test pl isa MakieTextRepel.TextRepel
 end
 
+@testset "textrepel (non-bang) smoke test" begin
+    # The exported non-bang form builds its own Figure/Axis and returns a
+    # FigureAxisPlot whose `.plot` is the recipe object.
+    fap = textrepel(Point2f[(1, 1), (2, 2)]; text = ["a", "b"])
+    @test fap isa Makie.FigureAxisPlot
+    @test fap.plot isa MakieTextRepel.TextRepel
+end
+
 @testset "textrepel end-to-end (plain text)" begin
     fig = Figure(size = (400, 400))
     ax = Axis(fig[1, 1])
@@ -243,8 +251,8 @@ end
     # `cell === nothing && coord_counts > 1`, NOT on pin_mask — so it fires on the
     # recipe path too. For EXACTLY coincident anchors the recipe no longer reproduces
     # the pre-refactor TR-slot collapse; instead both labels are seeded in distinct
-    # directions and separate. This is intended (the spec's coincident-separation
-    # goal), and this test documents/guards it so the byte-identity story is explicit:
+    # directions and separate. This is intended (the coincident-separation
+    # behavior), and this test documents/guards it so the byte-identity story is explicit:
     # byte-identity holds for distinct anchors; exactly-coincident anchors are the
     # one carved-out exception.
     fig = Figure()
@@ -392,6 +400,9 @@ end
     # a solve-only `box_padding` change re-measures (+1 call); with the split it reuses the
     # cached `measured_sizes` node (+0). A measure-input (`text`) change re-measures in both.
     measure_calls = Ref(0)
+    # NOTE: the two "Method definition measure_labels(...) overwritten" WARNINGs this
+    # block prints (here and at the `finally` restore) are EXPECTED — they are how we
+    # swap in / out the call-counting instrumentation. Do not try to "fix" them.
     try
         @eval MakieTextRepel function measure_labels(labels, font, fontsize::Real, ppu::Real)
             $(measure_calls)[] += 1

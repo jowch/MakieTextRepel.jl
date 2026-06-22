@@ -608,8 +608,8 @@ end
 @testset "annotation fresh path produces crossing-free leaders (#12)" begin
     # Invariant: the fresh annotation path reaches solve_cluster, so its leaders are
     # crossing-free. (That repair is *responsible* — vs voronoi-init alone — is proven
-    # deterministically at the solve_cluster level in Task 4's fresh-path test; this is
-    # the annotation-surface end-to-end invariant.)
+    # deterministically at the solve_cluster level by the projection-solver tests; this
+    # is the annotation-surface end-to-end invariant.)
     anchors = [Point2f(0, 0), Point2f(40, 0), Point2f(0, 40), Point2f(40, 40)]
     n = length(anchors)
     bbox = Rect2f(-100, -100, 300, 300)
@@ -646,7 +646,7 @@ end
     @test o1 == o2                       # seeded voronoi → identical across runs
 end
 
-@testset "annotation fresh path separates coincident anchors (#12, spec item 5)" begin
+@testset "annotation fresh path separates coincident anchors (#12)" begin
     # Coincident anchors (2,3) must not collapse onto the same rendered position.
     anchors = [Point2f(0,0), Point2f(10,0), Point2f(10,0), Point2f(0,10)]
     n = length(anchors)

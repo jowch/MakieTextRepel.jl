@@ -1,9 +1,9 @@
-# geometry.jl — pure axis-aligned bounding-box helpers (GeometryBasics only).
+# geometry.jl — pure AABB helpers (GeometryBasics only).
 
-"""Sign that never returns 0 (deterministic tie-break toward +)."""
+"""Sign that never returns 0 (ties go to +)."""
 sign0(x::Real) = x >= 0 ? 1f0 : -1f0
 
-"""Box for a label of `size` (w,h) centered at `anchor + offset`."""
+"""Box of `size` (w,h) centered at `anchor + offset`."""
 box_at(anchor::Point2f, offset::Vec2f, size::Vec2f) =
     Rect2f(Point2f(anchor .+ offset .- size ./ 2), size)
 
@@ -11,10 +11,9 @@ _center(b::Rect2f) = Point2f(b.origin .+ b.widths ./ 2)
 
 """
 Per-axis separation push given center-difference `d` and per-axis overlaps.
-Zero if not overlapping. Pushes only along axes carrying directional info; a
-perfectly-aligned axis (`d[k] == 0`) contributes 0 so an aligned pair separates
-along the *other* axis instead of running away together. Fully-coincident
-centers fall back to +x (explosion init normally prevents this case).
+Zero if not overlapping. An aligned axis (`d[k] == 0`) contributes 0, so a
+collinear pair separates along the other axis. Fully-coincident centers fall
+back to +x.
 """
 function _aniso_push(d, ox::Real, oy::Real)
     (ox <= 0 || oy <= 0) && return Vec2f(0, 0)
@@ -24,7 +23,7 @@ function _aniso_push(d, ox::Real, oy::Real)
     return Vec2f(px, py)
 end
 
-"""Per-axis push moving box `a` away from overlapping box `b` (zero if disjoint)."""
+"""Per-axis push moving box `a` away from overlapping box `b`. Zero if disjoint."""
 function overlap_push(a::Rect2f, b::Rect2f)
     d = _center(a) .- _center(b)
     ox = (a.widths[1] + b.widths[1]) / 2 - abs(d[1])
@@ -32,9 +31,12 @@ function overlap_push(a::Rect2f, b::Rect2f)
     return _aniso_push(d, ox, oy)
 end
 
+"""`true` if boxes `a` and `b` overlap (i.e. `overlap_push` is nonzero)."""
+boxes_overlap(a::Rect2f, b::Rect2f) = overlap_push(a, b) != Vec2f(0, 0)
+
 """
 Push box away from point `p` if `p` lies within the box expanded by `padding`.
-Zero vector otherwise. Uses the same aligned-axis-safe scheme as `overlap_push`.
+Zero otherwise. Same aligned-axis-safe scheme as `overlap_push`.
 """
 function point_push(box::Rect2f, p::Point2f, padding::Float32)
     ex = Rect2f(Point2f(box.origin .- padding), box.widths .+ 2padding)
@@ -46,10 +48,8 @@ end
 
 """
 True iff point `p` lies strictly inside `box` expanded by `padding` on every side.
-Strict inequalities (a point on the expanded edge is not covered) match the
-`clip_to_box_edge` convention. Shared by `side_select`'s marker-avoidance term and
-`label_cost`'s `point_overlaps` count, so the engine objective and the Q scoreboard
-count the same events.
+Strict inequalities: a point on the expanded edge is not covered. Shared by
+`side_select`'s marker-avoidance term and `label_cost`'s `point_overlaps` count.
 """
 function point_covered(p::Point2f, box::Rect2f, padding::Real)
     pad = Float32(padding)
@@ -59,10 +59,10 @@ function point_covered(p::Point2f, box::Rect2f, padding::Real)
 end
 
 """
-Point on the boundary of `box` along the ray from the box center toward `target`
+Point on `box`'s boundary along the ray from box center toward `target`
 (ggrepel-style connector attachment). Returns `nothing` when `target` lies
-strictly inside the box on both axes — no clean segment can be drawn. A target
-on a face or corner is a valid endpoint at `t = 1`.
+strictly inside the box on both axes. A target on a face or corner is valid
+(`t = 1`).
 """
 function clip_to_box_edge(box::Rect2f, target::Point2f)
     c = _center(box)
@@ -78,7 +78,7 @@ function clip_to_box_edge(box::Rect2f, target::Point2f)
 end
 
 # Per-axis corrective shift to bring one interval inside another, preserving width.
-# If the box is wider than the bounds on this axis, pin it to the lower edge.
+# Box wider than bounds on this axis → pin to lower edge.
 function _clamp_axis(lo, hi, blo, bhi, w, bw)
     w  > bw  && return blo - lo   # larger than bounds → pin lower edge
     lo < blo && return blo - lo   # over lower edge → push toward +
@@ -87,10 +87,9 @@ function _clamp_axis(lo, hi, blo, bhi, w, bw)
 end
 
 """
-Minimal shift to bring `box` fully inside `bounds`, preserving its size. Returns a
-zero vector if it already fits. If `box` is larger than `bounds` on an axis, pins it
-to that axis's lower edge — in Makie's y-up pixel space that is the left edge on x and
-the bottom edge on y.
+Minimal shift to bring `box` fully inside `bounds`, preserving size. Returns zero
+vector if already fits. If `box` is larger than `bounds` on an axis, pins to that
+axis's lower edge (left on x, bottom on y in Makie's y-up pixel space).
 """
 function clamp_box_offset(box::Rect2f, bounds::Rect2f)
     lo, hi   = box.origin, box.origin .+ box.widths

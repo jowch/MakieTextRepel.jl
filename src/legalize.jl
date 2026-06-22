@@ -1,17 +1,13 @@
 # legalize.jl — Dykstra constraint-projection node-overlap removal. Pure, GeometryBasics-only.
 #
-# Per round: collect currently-overlapping pairs, assign each to its cheaper
-# (smaller-penetration) axis as a 1-D separation constraint, then project onto
-# those constraints with Dykstra's cyclic algorithm (the minimum-displacement
-# point satisfying them — the QP VPSC solves), clamp to bounds, repeat. Fixed
-# nodes contribute their extents but never move. Caps at `rounds`; a positive
-# returned `residual` means the scene could not be cleared in-bounds (over-capacity).
+# Per round: assign each overlapping pair to its cheaper (smaller-penetration) axis as a
+# 1-D separation constraint, project with Dykstra's cyclic algorithm, clamp to bounds,
+# repeat. Dykstra returns the minimum-displacement point satisfying the constraints.
+# Fixed nodes contribute extents but never move. Positive `residual` = scene couldn't be
+# cleared in-bounds.
 #
-# Note on the nested caps (`rounds=400` outer × `iters=5000` inner Dykstra): this is a
-# generous *worst-case* budget, not a typical cost. The inner `tol` early-exit and the
-# outer no-constraint early-break terminate far short of the caps on real label scenes;
-# the caps exist only as a backstop for pathological inputs. A genuinely scalable solver
-# would use corrected-2007 scan-line VPSC instead — consciously deferred (see spec Non-goals).
+# Caps (`rounds=400` × `iters=5000`) backstop pathological inputs; early-exits stop well
+# short on real scenes. Scan-line VPSC deferred.
 
 """
 Dykstra cyclic projection onto separation constraints `pos[hi] - pos[lo] >= gap`.
@@ -55,15 +51,13 @@ end
     legalize(anchors, offsets, psizes, bounds; fixed, soft=nothing, only_move=:both, rounds=400)
         -> (; offsets::Vector{Vec2f}, residual::Float32, rounds_used::Int)
 
-Move boxes the minimum distance needed so no two padded boxes overlap. `psizes`
-are padded sizes; box i is centered at `anchors[i] + offsets[i]` with half-extents
-`psizes[i]/2`. `fixed[i]` pins box i (contributes extents, never moves) — obstacle
-pseudo-nodes are passed as fixed entries by the caller. `soft[i]` marks a keep-out
-node that participates in projection (it still pushes movable nodes) but is excluded
-from the returned `residual`; used for marker keep-outs whose clearance shortfall
-must not trigger label dropping. `only_move` restricts separation to one axis.
-`residual` is the max remaining >0.01px penetration after the round cap; >0.5 means
-over-capacity. Offsets of un-moved labels are returned bit-identical to the input.
+Move boxes the minimum distance so no two padded boxes overlap. Box i is centered at
+`anchors[i] + offsets[i]` with half-extents `psizes[i]/2`. `fixed[i]` pins box i
+(contributes extents, never moves); obstacles are passed as fixed entries. `soft[i]`
+nodes push movable nodes but are excluded from `residual` (marker keep-outs, so a
+clearance shortfall never triggers a drop). `only_move` restricts separation to one
+axis. `residual` is the max remaining >0.01px penetration; >0.5 means over-capacity.
+Un-moved labels' offsets are returned bit-identical.
 """
 function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
                   psizes::Vector{Vec2f}, bounds::Rect2f;
@@ -85,8 +79,8 @@ function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
 
     rounds_used = rounds
     for r in 1:rounds
-        # Clamp movable nodes into bounds FIRST, so a non-overlapping but
-        # out-of-bounds layout is still confined before the no-constraint break.
+        # Clamp movable nodes into bounds first, so a non-overlapping but out-of-bounds
+        # layout is still confined before the no-constraint break.
         for i in 1:n
             movable[i] || continue
             x[i] = clamp(x[i], xlo_b + hw[i], xhi_b - hw[i])
@@ -117,10 +111,9 @@ function legalize(anchors::Vector{Point2f}, offsets::Vector{Vec2f},
         dykstra!(x, xcons, movable)
         dykstra!(y, ycons, movable)
     end
-    # Final clamp: guarantee in-bounds output even if the loop hit the round cap
-    # right after a dykstra push (the residual below is then measured on the clamped layout).
-    # On an over-capacity (round-cap) scene this clamp may pull a box back into one it had
-    # been separated from; `residual` (measured next) accounts for any overlap it reintroduces.
+    # Final clamp: guarantee in-bounds output even if the loop hit the round cap. On an
+    # over-capacity scene this may pull a box back into one it was separated from;
+    # `residual` (measured next) accounts for any overlap it reintroduces.
     for i in 1:n
         movable[i] || continue
         x[i] = clamp(x[i], xlo_b + hw[i], xhi_b - hw[i])
