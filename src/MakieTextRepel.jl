@@ -22,15 +22,15 @@ include("side_select.jl")     # greedy discrete Imhof-slot refinement
 include("legalize.jl")        # Dykstra constraint-projection overlap removal
 include("cost.jl")            # read-only placement-quality functional (label_cost)
 
-# Force-directed model — the non-default fallback path
-include("force_model.jl")     # solve_repel + helpers (formerly solver.jl)
+# Force-directed model — non-default fallback
+include("force_model.jl")     # solve_repel + helpers
 
 # Cluster-solver seam + implementations
 include("solvers/abstract.jl")    # AbstractClusterSolver interface
 include("solvers/force.jl")       # ForceSolver — wraps force_model.jl
-include("solvers/projection.jl")  # ProjectionSolver — the DEFAULT, composes the stages above
+include("solvers/projection.jl")  # ProjectionSolver — DEFAULT, composes the stages above
 
-# Public stateless warm-start primitive (face over the internal seam)
+# Public warm-start primitive
 include("warm_solve.jl")
 
 # Measurement + Makie surfaces

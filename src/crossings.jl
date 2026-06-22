@@ -1,10 +1,9 @@
 # crossings.jl — leader-segment crossing detection and 2-opt repair.
 
 """
-Strict segment-segment intersection test via signed-area orientation.
-Returns `true` only when the segments properly cross (each segment's
-endpoints lie on opposite sides of the other line). Endpoint-touching
-and collinear-overlap return `false`.
+Segment-segment intersection via signed-area orientation.
+`true` only when endpoints of each segment strictly straddle the other line.
+Endpoint-touching and collinear-overlap return `false`.
 """
 function segments_cross(p1::Point2f, p2::Point2f, p3::Point2f, p4::Point2f)
     o(a, b, c) = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
@@ -38,9 +37,8 @@ function find_crossings(connectors::Vector{Connector})
 end
 
 """
-Exchange absolute positions of labels `i` and `j` while preserving their
-(label_text → anchor) identity. The new offsets are computed so each label's
-absolute position becomes the other's old absolute position.
+Swap the absolute positions of labels `i` and `j`, preserving label→anchor identity.
+Each label's offset is recomputed so it lands at the other's prior position.
 """
 function swap_positions!(offsets::Vector{Vec2f}, anchors::Vector{Point2f}, i::Int, j::Int)
     pos_i_old = anchors[i] .+ offsets[i]
@@ -51,18 +49,14 @@ function swap_positions!(offsets::Vector{Vec2f}, anchors::Vector{Point2f}, i::In
 end
 
 """
-Iterate: scan for crossings; for each non-conflicting crossing pair swap label
-positions; repeat. Terminates when no crossings remain or `max_iter` exceeded.
-`min_len` matches `min_segment_length` from the recipe so the scan agrees with
-what `build_connectors` would render. No default — callers must pass the value
-the renderer will use, so the scan and the render agree byte-for-byte.
+2-opt crossing repair: scan, swap non-conflicting crossing pairs, repeat until
+no crossings remain or `max_iter` is hit. Returns outer iterations consumed
+(0 if already crossing-free).
 
-Returns the number of outer iterations consumed (0 if no crossings on first scan).
-On cap-out, performs one final rescan and emits a `@warn` listing the residual
-crossings — the "best-effort with backstop" signal.
-The non-crossing guarantee holds whenever this function returns < `max_iter`,
-*except* for crossings that touch a pinned label (via `pin_mask`): those are never
-swapped, so the early no-progress return can leave such pinned crossings in place.
+`min_len` must match `min_segment_length` from the recipe — no default enforces
+agreement with `build_connectors`. Crossings touching a pinned label (`pin_mask`)
+are skipped; early exit when no swap is possible. On cap-out, final rescan
+emits a `@warn` listing residual crossings (best-effort with backstop).
 """
 function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
                            sizes::Vector{Vec2f}, dropped::BitVector,
@@ -85,14 +79,11 @@ function repair_crossings!(offsets::Vector{Vec2f}, anchors::Vector{Point2f},
             push!(swapped, i)
             push!(swapped, j)
         end
-        # All remaining crossings touch a pinned label → no swap is possible.
-        # Return early instead of burning the rest of max_iter (and emitting the
-        # spurious "without convergence" @warn over crossings we are intentionally
-        # leaving in place). The residual is expected, not a failure.
+        # All remaining crossings touch pinned labels — no swap possible. Return
+        # early to avoid the spurious cap-out @warn; residual is expected here.
         isempty(swapped) && return iter
     end
-    # Final rescan — distinguishes "capped out and converged on the last swap"
-    # from "capped out with crossings still present". Only warn for the latter.
+    # Final rescan: warn only if crossings remain (not if the last swap converged).
     final_connectors = [connector_for(anchors[i], offsets[i], sizes[i], dropped[i], params, min_len)
                         for i in eachindex(offsets)]
     residual = find_crossings(final_connectors)

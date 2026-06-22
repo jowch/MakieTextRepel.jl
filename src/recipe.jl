@@ -1,4 +1,4 @@
-# recipe.jl — the TextRepel Makie recipe.
+# recipe.jl — TextRepel Makie recipe.
 
 @recipe TextRepel (positions,) begin
     "Labels to place: Vector of String / LaTeXString / rich text."
@@ -64,30 +64,25 @@ Makie.convert_arguments(::Type{<:TextRepel}, x::AbstractVector{<:Real}, y::Abstr
     (Point2f.(x, y),)
 
 function Makie.plot!(p::TextRepel)
-    # 1. Project anchors data → scene-local pixels (compute-graph node).
+    # 1. Project anchors to pixel space.
     register_projected_positions!(p, Point3f;
         input_space = :data, output_space = :pixel,
         input_name = :positions, output_name = :px_anchors)
 
-    # Clamp region: the axis data-area viewport, SIZE ONLY. The viewport Rect2i carries
-    # a figure-relative origin, but :pixel anchors are scene-local (origin at the axis
-    # lower-left), so we use (0,0)–widths and discard the origin.
+    # Clamp region: viewport size only. Viewport Rect2i origin is figure-relative but
+    # :pixel anchors are scene-local (axis lower-left = 0,0), so discard the origin.
     bounds_obs = lift(Makie.viewport(Makie.parent_scene(p))) do vp
         Rect2f(0, 0, Float32.(widths(vp))...)
     end
 
-    # 2a. Measure label boxes. Depends ONLY on text/fontsize/font — the three
-    #     measure-invalidating inputs (#25) — so it is NOT re-run when positions
-    #     or any solve-only param change (the movie/animation reuse case). Makie's
-    #     reactive graph reuses the cached sizes whenever measurement can't change.
+    # 2a. Measure label boxes. Keyed on text/fontsize/font only (#25): not re-run on
+    #     position or solve-param changes (animation reuse).
     measured_sizes = lift(p.text, p.fontsize, p.font) do labels, fs, font
         measure_labels(labels, font, fs, 1.0)
     end
 
-    # 2b. Solve. Consumes the cached `measured_sizes`; re-runs on anchor/param
-    #     changes while reusing measurements. `sizes` is threaded back into the
-    #     result tuple so every downstream node (box_rects, seg_points,
-    #     computed_sizes) is unchanged.
+    # 2b. Solve. Reuses cached `measured_sizes`; re-runs on anchor/param changes.
+    #     `sizes` threaded into result tuple for downstream nodes.
     solved = lift(p.px_anchors, measured_sizes,
                   p.force, p.force_point, p.force_pull, p.max_iter, p.only_move,
                   p.box_padding, p.point_padding, p.max_overlaps, bounds_obs,
@@ -95,8 +90,7 @@ function Makie.plot!(p::TextRepel)
                                                           fr, frp, fpl, mi, om,
                                                           bp, pp, mo, bnds, ml, ms, is, obs
         anchors = [Point2f(q[1], q[2]) for q in px]
-        # markersize (sibling scatter) overrides point_padding when set. textrepel!
-        # draws no markers; this only declares the sibling size for clearance.
+        # markersize overrides point_padding when set.
         eff_pp = if ms === nothing
             Float64(pp)
         elseif ms isa Real
@@ -111,15 +105,8 @@ function Makie.plot!(p::TextRepel)
                                box_padding = Float64(bp), point_padding = eff_pp,
                                max_overlaps = Float64(mo), bounds = bnds,
                                min_segment_length = Float64(ml))
-        # `bounds_obs` always yields a Rect2f, so `bnds` is never `nothing` here.
-        # `bounds = bnds` is set in `params` (exposed as `computed_params`) AND passed
-        # positionally; `solve_cluster` overrides params.bounds from the positional arg,
-        # so the two agree. Full placement strategy lives in the seam (voronoi-seed →
-        # side-select → crossing-repair → constraint-projection legalize).
-        # The two animation attrs (`init_state`, `obstacles`) are also threaded in here:
-        # `nothing`/`Rect2f[]` defaults reproduce the unchanged fresh-placement path.
-        # Coerce to the seam's expected types; `is` nothing = fresh, `obs` empty = none.
-        # (`obstacles` defaults to `Rect2f[]`, never `nothing`, so no nothing-guard needed.)
+        # `bounds_obs` always yields a Rect2f; `bnds` is never nothing here.
+        # `obstacles` defaults to Rect2f[], never nothing — no nothing-guard needed.
         is_v  = is === nothing ? nothing : Vector{Vec2f}(is)
         obs_v = Vector{Rect2f}(obs)
         sol = solve_cluster(ProjectionSolver(params), anchors, sizes, bnds;
@@ -127,16 +114,15 @@ function Makie.plot!(p::TextRepel)
         (; anchors, sizes, offsets = sol.offsets, dropped = sol.dropped, params)
     end
 
-    # Expose offsets for testing / downstream use. NOTE: in Makie 0.24 `p.attributes`
-    # is a ComputeGraph, not a dict — use `add_input!`, not `setindex!`.
+    # Expose offsets for testing/downstream use.
+    # Gotcha: p.attributes is a ComputeGraph (Makie 0.24), not a dict — use add_input!, not setindex!.
     Makie.add_input!(p.attributes, :computed_offsets, lift(s -> s.offsets, solved))
     Makie.add_input!(p.attributes, :computed_anchors, lift(s -> s.anchors, solved))
     Makie.add_input!(p.attributes, :computed_sizes,   lift(s -> s.sizes,   solved))
     Makie.add_input!(p.attributes, :computed_dropped, lift(s -> s.dropped, solved))
     Makie.add_input!(p.attributes, :computed_params,  lift(s -> s.params,  solved))
 
-    # 3. Render text at original DATA positions with per-label pixel offsets,
-    #    filtering out dropped labels.
+    # 3. Render text at data positions with pixel offsets; skip dropped labels.
     keep_positions = lift(p.positions, solved) do pos, s
         Point2f[pos[i] for i in eachindex(pos) if !s.dropped[i]]
     end
@@ -145,8 +131,7 @@ function Makie.plot!(p::TextRepel)
     end
     keep_offsets = @lift Vec2f[$solved.offsets[i] for i in eachindex($solved.offsets) if !$solved.dropped[i]]
 
-    # 3a. Optional background boxes (drawn beneath text), pixel space.
-    # TODO(rounded-corners): cornerradius attribute is wired but unused here; v1 draws plain Rect2f.
+    # 3a. Background boxes (pixel space). cornerradius is wired but unused; draws plain Rect2f.
     box_rects = lift(solved, p.background, p.box_padding) do s, bg, bp
         bg || return Rect2f[]
         pad = Float32(bp)
@@ -161,7 +146,7 @@ function Makie.plot!(p::TextRepel)
         text = keep_text, offset = keep_offsets, markerspace = :pixel,
         fontsize = p.fontsize, font = p.font, color = p.color, align = p.align)
 
-    # 4. Connector segments (pixel space; coexists with data-space text anchors).
+    # 4. Connector segments (pixel space).
     seg_points = lift(solved, p.min_segment_length, p.box_padding, p.point_padding, p.segments) do s, ml, bp, pp, on
         on || return Point2f[]
         build_connectors(s.anchors, s.offsets, s.sizes, s.dropped,
@@ -173,11 +158,8 @@ function Makie.plot!(p::TextRepel)
     return p
 end
 
-# Axis autolimits must track the data anchors only — the pixel-space offset
-# children (text, boxes, connectors) must not inflate the limits. The axis's
-# linear-scale path uses `boundingbox(scene, exclude)`, NOT `data_limits`, so we
-# must override BOTH (mirroring Makie's own `textlabel` recipe), otherwise the
-# `text!` child's pixel glyph extents leak into the data limits.
+# Gotcha: axis autolimits must see only the data anchors. The linear-scale path
+# uses boundingbox, not data_limits — override BOTH or pixel glyph extents leak.
 Makie.data_limits(p::TextRepel) = Makie.data_limits(p.plots[1])
 Makie.data_limits(p::TextRepel{<:Tuple{<:AbstractVector{<:Point}}}) = Rect3d(p[1][])
 Makie.boundingbox(p::TextRepel, space::Symbol) =

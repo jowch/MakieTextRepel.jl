@@ -25,13 +25,10 @@ argument of `warm_solve`, e.g.
 measure_labels(labels, font, fontsize::Real, px_per_unit::Real) =
     [measure_one(lbl, font, Float64(fontsize), Float64(px_per_unit)) for lbl in labels]
 
-# Friendly default: the recipe always measures at px_per_unit = 1.0, which is also the
-# right default for pixel-space warm_solve consumers. Keeps the 4-arg method (internal
-# callers pass ppu positionally) working unchanged.
+# 3-arg default: px_per_unit = 1.0 (pixel space). Internal callers pass ppu positionally.
 measure_labels(labels, font, fontsize::Real) = measure_labels(labels, font, fontsize, 1.0)
 
-# Plain strings (and LaTeXString) → TextMeasure layout engine, render-free.
-# The string path passes ppu straight into the backend (layout honors it).
+# Plain strings (and LaTeXString) → TextMeasure layout engine. ppu passed to backend.
 # TODO(glyph-fallback): route through text_bb when the resolved font lacks the label's glyphs.
 function measure_one(label::AbstractString, font, fontsize::Float64, ppu::Float64)
     f = _resolve_font(font)
@@ -40,9 +37,8 @@ function measure_one(label::AbstractString, font, fontsize::Float64, ppu::Float6
     return Vec2f(lay.size[1], lay.size[2])
 end
 
-# Rich text → TextMeasure measure_bounds, render-free. measure_bounds requires
-# px_per_unit == 1 (its line-drop stub does not scale), so we measure at 1 and
-# apply ppu as a post-scale — matching the old full_boundingbox(:pixel) * ppu.
+# Rich text → TextMeasure measure_bounds. measure_bounds requires px_per_unit == 1
+# (line-drop stub does not scale); measure at 1 and post-scale by ppu.
 function measure_one(label::Makie.RichText, font, fontsize::Float64, ppu::Float64)
     f = _resolve_font(font)
     backend = TextMeasure.MakieBackend(; font = f, fontsize = fontsize, px_per_unit = 1.0)
@@ -50,8 +46,7 @@ function measure_one(label::Makie.RichText, font, fontsize::Float64, ppu::Float6
     return Vec2f(tb.size[1] * ppu, tb.size[2] * ppu)
 end
 
-# Any other label type → a clear error. The old Scene path also failed on these
-# (Makie has no convert_text_string! for Symbol/Number); this just makes it legible.
+# Any other label type → clear error (String, LaTeXString, and RichText are the only supported types).
 measure_one(label, font, fontsize::Float64, ppu::Float64) =
     throw(ArgumentError("textrepel! labels must be String, LaTeXString, or " *
                         "Makie.RichText; got $(typeof(label))"))
