@@ -79,17 +79,13 @@ covered, mean leader length, crossings. It is diagnostics only, exposed through
 
 ## What this gives you
 
-- **Deterministic output.** The pipeline is deterministic: its one randomized
-  dependency — the Delaunay triangulator used to build the Voronoi seed — is pinned to
-  a fixed seed, and the rest of the pipeline is RNG-free. The seed otherwise comes from
-  anchor geometry and label index, so the same data produces the same figure every
-  time. That makes image-regression tests and reproducible publication figures easy.
-  The default `ProjectionSolver` carries no RNG: its one randomized dependency
-  (DelaunayTriangulation, for the Voronoi-informed seed) is seeded with
-  `MersenneTwister(0)` over lexicographically sorted points, and every other stage
-  is a pure deterministic algorithm. Identical inputs therefore produce
+- **Deterministic output.** The default `ProjectionSolver` carries no RNG: its one
+  randomized dependency (DelaunayTriangulation, for the Voronoi-informed seed) is
+  seeded with `MersenneTwister(0)` over lexicographically sorted points, and every
+  other stage is a pure deterministic algorithm. Identical inputs therefore produce
   byte-identical offsets and drop masks, so downstream consumers of the public
-  `warm_solve` primitive may golden-test placement directly. (Exactly-coincident
+  `warm_solve` primitive may golden-test placement directly, and image-regression
+  tests and reproducible publication figures come for free. (Exactly-coincident
   anchors fan out along a fixed golden-angle spiral — also fully reproducible.)
 - **Zero overlap** (no two label boxes penetrating by more than about half a pixel) on
   any scene that fits in the viewport. This is the separation property of the

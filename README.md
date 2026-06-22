@@ -1,5 +1,8 @@
 # MakieTextRepel.jl
 
+[![CI](https://github.com/jowch/MakieTextRepel.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/jowch/MakieTextRepel.jl/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/gh/jowch/MakieTextRepel.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/jowch/MakieTextRepel.jl)
+
 A `ggrepel`/`adjustText`-style label-repel recipe for [Makie](https://docs.makie.org).
 Automatically displaces overlapping text labels and draws connector lines back to
 their data points.
