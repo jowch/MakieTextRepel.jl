@@ -31,7 +31,7 @@ const BASELINE_SUM_LEADER = 59.896531105041504   # frozen from first green run o
 
 @testset "ProjectionSolver: zero overlap per scene; shorter leader in aggregate" begin
     # Per-scene leader length is NOT a theorem (a sparse scene's force_pull can hug the
-    # anchor closer than a discrete Imhof slot). §7e validated the win in AGGREGATE
+    # anchor closer than a discrete Imhof slot). The leader win holds in AGGREGATE
     # (~2× shorter across knot/collinear/sparse). So assert zero-overlap per scene
     # (the hard guarantee) and the leader win as an aggregate with a real margin.
     p = RepelParams()
@@ -183,7 +183,7 @@ end
     # To re-derive the frozen baseline if fixtures change: print `total_leader` here and
     # update `BASELINE_SUM_LEADER` above (kept out of the default run to keep CI output clean).
     @test total_overlaps == 0 && total_point == 0   # aggregate hard-term non-regression
-    @test total_crossings == 0                      # crossing baseline (Stage 3 must not regress)
+    @test total_crossings == 0                      # crossing baseline (must not regress)
     @test total_leader ≤ 1.05 * BASELINE_SUM_LEADER  # leader-length regression gate
 end
 
@@ -294,7 +294,7 @@ end
     @test res.dropped[1] == false
 
     # --- Anti-cascade: marker-clearance that is in-bounds-UNSATISFIABLE must NOT drop a
-    # label (soft nodes excluded from the drop-triggering residual, §1a). Lock to y in a
+    # label (soft nodes excluded from the drop-triggering residual). Lock to y in a
     # SHORT viewport so neither label can clear its own marker; labels far apart in x ⇒
     # honest baseline drop count is 0. A regression that let soft count toward residual
     # would drop a label here.

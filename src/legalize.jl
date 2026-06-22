@@ -11,7 +11,7 @@
 # generous *worst-case* budget, not a typical cost. The inner `tol` early-exit and the
 # outer no-constraint early-break terminate far short of the caps on real label scenes;
 # the caps exist only as a backstop for pathological inputs. A genuinely scalable solver
-# would use corrected-2007 scan-line VPSC instead — consciously deferred (see spec Non-goals).
+# would use corrected-2007 scan-line VPSC instead — consciously deferred.
 
 """
 Dykstra cyclic projection onto separation constraints `pos[hi] - pos[lo] >= gap`.

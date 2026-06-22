@@ -58,7 +58,7 @@ function initial_offsets(anchors::Vector{Point2f}, sizes::Vector{Vec2f},
     # would otherwise get the same TR fallback slot as its twin → collapse. Tag those
     # so we can fan them out by index. Distinct-but-degenerate (e.g. collinear) labels
     # are NOT tagged — they keep the plain TR fallback (preserves recipe byte-identity
-    # and Task 4's distinct-collinear crossing layout).
+    # and the distinct-collinear crossing layout).
     coord_counts = Dict{Tuple{Float32,Float32},Int}()
     for a in anchors
         k = (a[1], a[2]); coord_counts[k] = get(coord_counts, k, 0) + 1

@@ -59,7 +59,7 @@ the renderer will use, so the scan and the render agree byte-for-byte.
 
 Returns the number of outer iterations consumed (0 if no crossings on first scan).
 On cap-out, performs one final rescan and emits a `@warn` listing the residual
-crossings — this is the "best-effort with backstop" signal the spec describes.
+crossings — the "best-effort with backstop" signal.
 The non-crossing guarantee holds whenever this function returns < `max_iter`,
 *except* for crossings that touch a pinned label (via `pin_mask`): those are never
 swapped, so the early no-progress return can leave such pinned crossings in place.

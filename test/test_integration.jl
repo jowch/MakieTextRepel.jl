@@ -251,8 +251,8 @@ end
     # `cell === nothing && coord_counts > 1`, NOT on pin_mask — so it fires on the
     # recipe path too. For EXACTLY coincident anchors the recipe no longer reproduces
     # the pre-refactor TR-slot collapse; instead both labels are seeded in distinct
-    # directions and separate. This is intended (the spec's coincident-separation
-    # goal), and this test documents/guards it so the byte-identity story is explicit:
+    # directions and separate. This is intended (the coincident-separation
+    # behavior), and this test documents/guards it so the byte-identity story is explicit:
     # byte-identity holds for distinct anchors; exactly-coincident anchors are the
     # one carved-out exception.
     fig = Figure()

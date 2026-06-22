@@ -169,7 +169,7 @@ end
     @test iters_pin < 100        # broke out early instead of burning max_iter (would fail without the break fix)
 end
 
-@testset "repair_crossings! mixed: free pair repaired, pinned pair skipped (spec item 2)" begin
+@testset "repair_crossings! mixed: free pair repaired, pinned pair skipped" begin
     # Two INDEPENDENT crossing pairs, 100px apart vertically so they don't cross
     # each other. Pair (1,2) is fully free → swapped. Pair (3,4) touches pinned
     # label 3 → skipped (stays crossed).

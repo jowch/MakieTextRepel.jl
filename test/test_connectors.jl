@@ -37,8 +37,8 @@ end
 end
 
 @testset "build_connectors: anchor inside padded box is suppressed (locking)" begin
-    # This locks behavior already established by Task 1's strict-inside check.
-    # Task 2 must preserve it.
+    # Locks the strict-inside rule: an anchor strictly inside its padded box gets
+    # no connector segment.
     # Box at offset (5, 0), size (20, 10) → box x ∈ [-5, 15]. Anchor at (0, 0)
     # is strictly inside → no segment.
     anchors = [Point2f(0, 0)]
@@ -88,9 +88,8 @@ end
 end
 
 @testset "build_connectors: point_padding × min_segment_length interaction" begin
-    # Both knobs binding together. Locks the step-4 anchor-trim short-circuit
-    # against the step-6 visible-length filter (the two new filters introduced
-    # in this PR).
+    # Both knobs binding together. Locks the anchor-trim short-circuit against the
+    # visible-length filter (the two filters interacting).
     anchors = [Point2f(0, 0)]
     sizes = [Vec2f(20, 10)]
     dropped = falses(1)

@@ -159,7 +159,7 @@ function solve_cluster(s::ProjectionSolver, anchors::Vector{Point2f}, sizes::Vec
                                     # so reported `iter` reflects the whole solve, not just the
                                     # final accepted swap's legalize pass.
 
-    # Stage 3 Part B: swap-based local search to drive crossings to zero. Scan all crossing
+    # Swap-based local search to drive crossings to zero. Scan all crossing
     # pairs for the first swap whose post-legalize key strictly improves, adopt it, restart.
     # swapkey = (dropped_count, overlaps+point_overlaps, crossings, mean_leader): the top
     # dropped_count level forbids killing a crossing by dropping a label; overlaps dominate
