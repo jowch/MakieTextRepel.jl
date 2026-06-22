@@ -11,15 +11,14 @@ Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 TextMeasure = "06791c1d-2336-41e1-bd6f-a74c63395da6"
 
-[sources]
-# Local dev: TextMeasure checked out as a sibling directory. Switch to the
-# {url = "..."} form for CI / distribution once TextMeasure is pushed/registered.
-TextMeasure = {path = "../TextMeasure.jl"}
+[sources.TextMeasure]
+path = "../TextMeasure.jl"
 
 [compat]
 DelaunayTriangulation = "1.6"
 GeometryBasics = "0.5"
 Makie = "0.24"
+TextMeasure = "0.1"
 julia = "1.11"
 
 [extras]
