@@ -5,12 +5,27 @@ All notable changes to MakieTextRepel.jl are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2026-06-26
 
-Nothing has been tagged or registered yet — everything below is the pending
-first release. The internal `Project.toml` version bumps during development
-tracked milestones only; because no version was ever published, there are **no
-user-facing breaking changes** to report.
+### Added
+
+- **PrecompileTools workload (`src/precompile.jl`).** Precompiles the backend-free
+  public compute path — `measure_labels` plus the default `ProjectionSolver`
+  pipeline via `warm_solve` (fresh and warm-start) — so first-call latency is
+  paid at build time, not by the user. The recipe/`annotation!` render paths need
+  a live Makie backend and are intentionally left out of the workload.
+
+### Fixed
+
+- **`Could not find font regular` warning on the default font.** `measure_labels`
+  resolved a `Symbol` font (the default `@inherit font` value `:regular`) by
+  stringifying it, so it reached `Makie.to_font("regular")` — a literal font-name
+  lookup that fails, `@warn`s, and falls back. Font symbols
+  (`:regular`/`:bold`/`:italic`/`:bold_italic`) are theme-collection keys, not
+  font names; they now resolve through the theme `fonts` collection the way Makie
+  does internally, so the default path is silent. (#31)
+
+## [0.1.0] - 2026-06-25
 
 ### Added
 
@@ -123,10 +138,5 @@ user-facing breaking changes** to report.
 - `RepelParams` and its `RepelParams(base::RepelParams; kwargs...)`
   copy-with-overrides constructor; `solve_repel` returns a NamedTuple
   `(; offsets, dropped, iter, residual)` (positional destructuring still works).
-- **PrecompileTools workload (`src/precompile.jl`).** Precompiles the backend-free
-  public compute path — `measure_labels` plus the default `ProjectionSolver`
-  pipeline via `warm_solve` (fresh and warm-start) — so first-call latency is
-  paid at build time, not by the user. The recipe/`annotation!` render paths need
-  a live Makie backend and are intentionally left out of the workload.
 - README with a `text!`-vs-`textrepel!` hero image, a runnable example
   (`examples/readme_example.jl`), a visual smoke test, and GitHub Actions CI.
