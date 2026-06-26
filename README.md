@@ -15,8 +15,7 @@ through `TextRepelAlgorithm`. (Reproduce with [`examples/readme_example.jl`](exa
 ## Installation
 
 ```julia
-using Pkg
-Pkg.add(url="https://github.com/jowch/MakieTextRepel.jl")
+] add MakieTextRepel
 ```
 
 Its measurement dependency, [TextMeasure.jl](https://github.com/jowch/TextMeasure.jl),
