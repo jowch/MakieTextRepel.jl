@@ -38,4 +38,7 @@ include("measure.jl")
 include("recipe.jl")
 include("annotation_algorithm.jl")
 
+# PrecompileTools workload — must come last (uses measure_labels + warm_solve).
+include("precompile.jl")
+
 end # module MakieTextRepel

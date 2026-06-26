@@ -123,5 +123,10 @@ user-facing breaking changes** to report.
 - `RepelParams` and its `RepelParams(base::RepelParams; kwargs...)`
   copy-with-overrides constructor; `solve_repel` returns a NamedTuple
   `(; offsets, dropped, iter, residual)` (positional destructuring still works).
+- **PrecompileTools workload (`src/precompile.jl`).** Precompiles the backend-free
+  public compute path — `measure_labels` plus the default `ProjectionSolver`
+  pipeline via `warm_solve` (fresh and warm-start) — so first-call latency is
+  paid at build time, not by the user. The recipe/`annotation!` render paths need
+  a live Makie backend and are intentionally left out of the workload.
 - README with a `text!`-vs-`textrepel!` hero image, a runnable example
   (`examples/readme_example.jl`), a visual smoke test, and GitHub Actions CI.
