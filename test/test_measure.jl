@@ -94,6 +94,21 @@ end
     @test lsize[1] > 0 && lsize[2] > 0
 end
 
+@testset "font symbol resolves without warning (regression)" begin
+    # The default `@inherit font` is the symbol :regular. It must resolve through
+    # the theme `fonts` collection (:regular => "TeX Gyre Heros Makie"), NOT stringify
+    # to "regular" — the literal-name lookup fails and warns ("Could not find font
+    # regular, using TeX Gyre Heros Makie"). It still falls back to the same font, so
+    # equal sizes alone don't catch it; assert the *absence* of the warning too.
+    # The `==` is deliberate (not `≈`): :regular must resolve to the *same* font as
+    # the literal name, so the boxes are byte-identical — that exactness is the
+    # assertion. Don't relax to `≈`; the warning check below is the real guard.
+    @test measure_labels(["Hi", "Mauna Kea"], :regular, 24.0, 1.0) ==
+          measure_labels(["Hi", "Mauna Kea"], "TeX Gyre Heros Makie", 24.0, 1.0)
+    @test_logs min_level = Base.CoreLogging.Warn measure_labels(["Hi"], :regular, 24.0, 1.0)
+    @test_logs min_level = Base.CoreLogging.Warn measure_labels(["Hi"], :bold, 24.0, 1.0)
+end
+
 @testset "measure_labels public surface (#26)" begin
     font = "TeX Gyre Heros Makie"
     # Exported so warm_solve consumers have a fully public labels -> sizes path.

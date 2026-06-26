@@ -4,7 +4,11 @@
 
 """Resolve a Makie font attribute to a font object TextMeasure accepts."""
 _resolve_font(f) = Makie.to_font(f)
-_resolve_font(f::Symbol) = Makie.to_font(String(f))
+# Font symbols (:regular/:bold/:italic/:bold_italic — the default `@inherit font`) are
+# theme-collection keys, NOT font names. Stringifying them hits to_font's literal-name
+# lookup, which fails and warns ("Could not find font regular"). Resolve through the
+# theme `fonts` Attributes the way Makie itself does.
+_resolve_font(f::Symbol) = Makie.to_font(Makie.current_default_theme()[:fonts], f)
 
 """
     measure_labels(labels, font, fontsize) -> Vector{Vec2f}
